@@ -29,8 +29,8 @@ app_root <- .find_app_root()
 # Source engine files (skip UI/server modules that need shiny at load time is
 # unnecessary — they only define functions — but shiny may not be attached, so
 # source only the engine + state helpers the tests exercise).
-engine_files <- c("01_read_qc.R", "02_position_zones.R", "03_anchor.R",
-                  "04_plots.R", "05_export.R", "06_chronogram.R",
+engine_files <- c("00_dam_align.R", "01_read_qc.R", "02_position_zones.R",
+                  "03_anchor.R", "04_plots.R", "05_export.R", "06_chronogram.R",
                   "07_activity.R", "app_config.R")
 for (f in engine_files) source(file.path(app_root, "R", f))
 

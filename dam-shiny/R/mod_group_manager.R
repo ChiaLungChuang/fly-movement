@@ -241,6 +241,96 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
       run_task$invoke(gid = gid, group = lean, app_root = app_root)
     }
 
+    # -- damalignr pre-check + confirmation dialog ------------------
+    # Before a run, diagnose each group's 3 monitor files (via the vendored
+    # engine in R/00_dam_align.R). Files that are already aligned run
+    # immediately; files that need alignment (staggered start/end, partial
+    # final minute, or a mid-file dropped sub-row that a bare read would
+    # truncate on) are held behind a confirmation dialog showing exactly what
+    # will change. Original uploads are never modified -- alignment writes new
+    # temp files used only for the run.
+    pending_gids  <- reactiveVal(character(0))   # gids awaiting confirmation
+    pending_plans <- reactiveVal(list())         # gid -> alignment plan
+
+    request_run <- function(gids) {
+      plans <- list(); need <- character(0)
+      for (gid in gids) {
+        g  <- rv$groups[[gid]]
+        mf <- c(plug   = g$monitor_paths$plug,
+                middle = g$monitor_paths$middle,
+                food   = g$monitor_paths$food)
+        if (any(vapply(mf, function(p) is.null(p) || !nzchar(p), logical(1)))) {
+          run_one(gid); next                      # let the engine report missing files
+        }
+        plan <- tryCatch(dam_plan_alignment(mf), error = function(e) NULL)
+        if (is.null(plan)) { run_one(gid); next }  # unreadable -> let the engine report
+        if (isTRUE(plan$needs_alignment)) {
+          plans[[gid]] <- plan; need <- c(need, gid)
+        } else {
+          run_one(gid)                             # already aligned: run straight away
+        }
+      }
+      if (length(need)) {
+        pending_gids(need); pending_plans(plans)
+        showModal(dam_align_modal(need, plans))
+      }
+    }
+
+    dam_align_modal <- function(need, plans) {
+      blocks <- lapply(need, function(gid) {
+        p <- plans[[gid]]
+        tags$div(
+          style = "margin-bottom:14px;",
+          tags$b(sprintf("Group: %s", rv$groups[[gid]]$label)),
+          tags$pre(
+            style = paste("white-space:pre-wrap; font-size:12px; background:#f6f8fa;",
+                          "padding:8px; border-radius:4px;"),
+            paste(p$report, collapse = "\n"))
+        )
+      })
+      modalDialog(
+        title = "Monitor files need alignment before combining",
+        tags$p(paste(
+          "These monitors do not currently line up, so the combiner would",
+          "otherwise stop with a row-count error. Review the planned fix, then",
+          "choose whether to align and run. Your original files are NOT",
+          "modified -- alignment writes new temporary files used only for this run.")),
+        blocks,
+        footer = tagList(
+          modalButton("Cancel"),
+          actionButton(session$ns("dam_confirm_align"), "Align & run",
+                       class = "btn-success", icon = icon("check"))
+        ),
+        size = "l", easyClose = FALSE
+      )
+    }
+
+    observeEvent(input$dam_confirm_align, {
+      need  <- pending_gids(); plans <- pending_plans()
+      removeModal()
+      for (gid in need) {
+        if (is.null(rv$groups[[gid]])) next        # removed while dialog open
+        plan  <- plans[[gid]]
+        paths <- tryCatch(dam_write_aligned(plan), error = function(e) NULL)
+        if (is.null(paths)) {
+          showNotification(sprintf("Alignment failed for '%s'.",
+                                   rv$groups[[gid]]$label),
+                           type = "error", duration = NULL)
+          next
+        }
+        g <- rv$groups[[gid]]
+        g$monitor_paths <- list(plug   = unname(paths["plug"]),
+                                middle = unname(paths["middle"]),
+                                food   = unname(paths["food"]))
+        rv$groups[[gid]] <- g
+        append_log(rv, c(sprintf("\n----- Aligned '%s' before run -----", g$label),
+                         plan$report))
+        showNotification(sprintf("Aligned '%s'; running.", g$label), type = "message")
+        run_one(gid)
+      }
+      pending_gids(character(0)); pending_plans(list())
+    })
+
     # -- Collect finished runs ---------------------------------------
     observeEvent(run_task$status(), {
       st <- run_task$status()
@@ -295,7 +385,7 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         showNotification("Select a group in the table first.", type = "warning")
         return()
       }
-      run_one(gid)
+      request_run(gid)
     })
 
     observeEvent(input$run_all, {
@@ -305,7 +395,7 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         showNotification("No pending groups to run.", type = "message")
         return()
       }
-      for (gid in pending) run_one(gid)
+      request_run(pending)
     })
 
     observeEvent(input$clear_log, { rv$log <- character(0) })
