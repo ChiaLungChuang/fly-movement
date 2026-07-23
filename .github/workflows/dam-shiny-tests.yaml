@@ -1,0 +1,79 @@
+name: dam-shiny tests
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'dam-shiny/**'
+      - '.github/workflows/dam-shiny-tests.yaml'
+  pull_request:
+    paths:
+      - 'dam-shiny/**'
+      - '.github/workflows/dam-shiny-tests.yaml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      # renv restores into a project library; cache it between runs.
+      RENV_PATHS_ROOT: ~/.local/share/renv
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # System libraries the R packages link against (ragg/textshaping/
+      # systemfonts for ggplot2 devices, xml2/curl/openssl, zlib for openxlsx).
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libcurl4-openssl-dev libssl-dev libxml2-dev zlib1g-dev \
+            libpng-dev libjpeg-dev libtiff5-dev \
+            libfontconfig1-dev libfreetype6-dev libharfbuzz-dev libfribidi-dev
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          # renv.lock records R 4.6.0; CI tracks the current release. renv warns
+          # on a version mismatch but restores fine. Pin here if you need an
+          # exact match.
+          r-version: 'release'
+          use-public-rspm: true
+
+      # Restores the exact package versions from dam-shiny/renv.lock and caches
+      # the library, so only the first run pays the install cost.
+      - uses: r-lib/actions/setup-renv@v2
+        with:
+          working-directory: dam-shiny
+
+      - name: Run testthat suite
+        working-directory: dam-shiny
+        run: Rscript tests/testthat.R
+
+      # The app-level shinytest2 test is not run here: shinytest2 is a dev-only
+      # dependency and is deliberately absent from renv.lock, so the test skips
+      # itself. To enable it, add shinytest2 to the lockfile and run:
+      #   Rscript -e 'shinytest2::test_app("tests/shinytest2")'
+
+      - name: Verify the app loads
+        working-directory: dam-shiny
+        run: |
+          Rscript -e '
+            suppressPackageStartupMessages({
+              library(shiny); library(shinydashboard); library(DT)
+              library(data.table); library(lubridate); library(ggplot2)
+              library(scales); library(openxlsx); library(readxl)
+              library(dplyr); library(rlang); library(zip)
+              library(future); library(promises)
+            })
+            for (f in list.files("R", pattern = "[.]R$", full.names = TRUE)) source(f)
+            app <- shinyApp(ui = app_ui(), server = app_server)
+            stopifnot(inherits(app, "shiny.appobj"))
+            cat("app object constructs OK\n")
+          '

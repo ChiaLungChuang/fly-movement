@@ -1,0 +1,26 @@
+# Non-secret default settings for dam-shiny, read at startup and used to
+# prefill the "Run settings" form. Overridable per-group in the UI.
+#
+# Read by R/app_config.R with a tiny built-in parser (no {config} package
+# dependency, so nothing extra to install for deployment). Only the flat
+# key: value pairs under `default:` are used. Set DAM_CONFIG_PROFILE to pick
+# a different top-level profile (falls back to `default`).
+
+default:
+  tz: "America/Chicago"
+  lights_on: "05:00:00"
+  lights_off: "17:00:00"
+  channels: "1:32"
+  start_datetime: "2026-01-29 05:00:00"
+  end_datetime: "2026-01-30 04:59:00"
+  death_threshold_hours: 12
+  sleep_threshold_min: 5
+  bout_window_min: 1
+  use_anchored: true
+  max_upload_mb: 250
+
+# Example alternate profile — activate with DAM_CONFIG_PROFILE=fly_room_2
+fly_room_2:
+  tz: "America/New_York"
+  lights_on: "06:00:00"
+  lights_off: "18:00:00"

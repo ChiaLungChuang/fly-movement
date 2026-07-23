@@ -1,0 +1,30 @@
+# ---- macOS ----
+.DS_Store
+**/.DS_Store
+
+# ---- R session / project cruft ----
+.Rhistory
+.RData
+.Rproj.user/
+.Ruserdata
+*.Rproj
+
+# ---- Generated analysis outputs (batch scripts write here) ----
+output/
+dam-shiny/output/
+
+# ---- renv project library (lockfile IS tracked; the library is not) ----
+renv/library/
+renv/local/
+renv/cellar/
+renv/staging/
+dam-shiny/renv/library/
+dam-shiny/renv/local/
+dam-shiny/renv/cellar/
+dam-shiny/renv/staging/
+
+# ---- Claude Code machine-local settings (shared settings.json stays tracked) ----
+.claude/settings.local.json
+
+# ---- Logs ----
+*.log

@@ -1,0 +1,14 @@
+# Keep the build context small and reproducible.
+tests/
+output/
+*.Rproj
+.Rproj.user/
+.Rhistory
+.RData
+.Ruserdata
+renv/
+.git/
+.gitignore
+scratchpad/
+*.log
+.DS_Store
