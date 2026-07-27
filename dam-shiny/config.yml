@@ -5,22 +5,25 @@
 # dependency, so nothing extra to install for deployment). Only the flat
 # key: value pairs under `default:` are used. Set DAM_CONFIG_PROFILE to pick
 # a different top-level profile (falls back to `default`).
+#
+# NOTE: the analysis period (start/end) is NOT set here — it is detected
+# automatically from the earliest/latest timestamps in the uploaded monitor
+# files. `tz` is internal only: file timestamps are parsed as naive wall-clock
+# (UTC) so what you see matches the files; it is not shown in the UI.
 
 default:
-  tz: "America/Chicago"
+  tz: "UTC"
   lights_on: "05:00:00"
   lights_off: "17:00:00"
   channels: "1:32"
-  start_datetime: "2026-01-29 05:00:00"
-  end_datetime: "2026-01-30 04:59:00"
   death_threshold_hours: 12
   sleep_threshold_min: 5
   bout_window_min: 1
   use_anchored: true
   max_upload_mb: 250
 
-# Example alternate profile — activate with DAM_CONFIG_PROFILE=fly_room_2
+# Example alternate profile — activate with DAM_CONFIG_PROFILE=fly_room_2.
+# Demonstrates profile inheritance: only the listed keys are overridden.
 fly_room_2:
-  tz: "America/New_York"
   lights_on: "06:00:00"
   lights_off: "18:00:00"

@@ -35,6 +35,28 @@ test_that("add_time_metadata assigns light/dark and experiment day", {
   expect_equal(out$experiment_day, c(1L, 1L, 1L, 2L))
 })
 
+test_that("detect_datetime_range finds the overlapping window across files", {
+  skip_if_not(all(file.exists(unlist(sample_paths))), "sample data missing")
+  r <- detect_datetime_range(unlist(sample_paths), tz = "UTC")
+  expect_s3_class(r$min, "POSIXct")
+  expect_true(r$min < r$max)
+  # detected values match the file wall-clock (parsed as UTC, no shift)
+  expect_equal(format(r$min, "%Y-%m-%d %H:%M", tz = "UTC"), "2026-01-28 15:07")
+  expect_true(r$earliest <= r$min && r$latest >= r$max)
+})
+
+test_that("detect_datetime_range errors when files don't overlap", {
+  d1 <- tempfile(fileext = ".txt"); d2 <- tempfile(fileext = ".txt")
+  # Case-A rows: idx, "DD Mon YY", "HH:MM:SS", then activity cols.
+  mk <- function(path, day) {
+    rows <- sprintf("%d\t%d Jan 26\t%02d:00:00\t0\tCt\t%s",
+                    1:3, day, 0:2, paste(rep(0, 32), collapse = "\t"))
+    writeLines(rows, path)
+  }
+  mk(d1, 1); mk(d2, 20)   # day 1 vs day 20 — no overlap
+  expect_error(detect_datetime_range(c(d1, d2), tz = "UTC"), "overlap")
+})
+
 test_that("parse_channels handles ranges, lists and clamping", {
   skip_if_not(exists("parse_channels"), "shiny not available")
   expect_equal(parse_channels("1:32"), 1:32)

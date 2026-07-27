@@ -8,13 +8,12 @@
 # ============================================================
 
 # Built-in fallbacks (used when config.yml is absent or a key is missing).
+# The analysis period is detected from the uploaded files, not configured here.
 .app_defaults <- list(
-  tz                    = "America/Chicago",
+  tz                    = "UTC",   # parse file timestamps as naive wall-clock
   lights_on             = "05:00:00",
   lights_off            = "17:00:00",
   channels              = "1:32",
-  start_datetime        = "2026-01-29 05:00:00",
-  end_datetime          = "2026-01-30 04:59:00",
   death_threshold_hours = 12,
   sleep_threshold_min   = 5,
   bout_window_min       = 1,
