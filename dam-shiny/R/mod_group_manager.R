@@ -41,9 +41,11 @@ mod_group_manager_ui <- function(id) {
       box(
         title = "Run settings (applied to new groups)", width = 4, status = "primary",
         solidHeader = TRUE,
-        textInput(ns("start_dt"), "Start datetime", cfg$start_datetime),
-        textInput(ns("end_dt"),   "End datetime",   cfg$end_datetime),
-        textInput(ns("tz"),       "Timezone",       cfg$tz),
+        # Analysis period — auto-detected from the uploaded files' earliest and
+        # latest timestamps; editable to narrow the window. No timezone: the
+        # date/time shown is read straight from the files (parsed as UTC).
+        uiOutput(ns("period_ui")),
+        tags$hr(style = "margin:8px 0"),
         splitLayout(
           textInput(ns("lights_on"),  "Lights on",  cfg$lights_on),
           textInput(ns("lights_off"), "Lights off", cfg$lights_off)
@@ -85,13 +87,92 @@ mod_group_manager_ui <- function(id) {
 mod_group_manager_server <- function(id, rv, parent = NULL) {
   moduleServer(id, function(input, output, session) {
 
+    ns <- session$ns
+
+    # -- Detect the recording period from the uploaded files ---------
+    # (all timestamps parsed as UTC / naive wall-clock, so what the user
+    #  sees matches the files exactly).
+    uploaded_paths <- reactive({
+      if (isTruthy(input$plug) && isTruthy(input$middle) && isTruthy(input$food)) {
+        c(plug   = input$plug$datapath,
+          middle = input$middle$datapath,
+          food   = input$food$datapath)
+      } else NULL
+    })
+
+    detected_range <- reactiveVal(NULL)
+
+    observeEvent(uploaded_paths(), {
+      paths <- uploaded_paths(); req(paths)
+      rng <- tryCatch(
+        detect_datetime_range(paths, tz = "UTC"),
+        error = function(e) {
+          showNotification(paste("Could not read dates from the files:",
+                                 conditionMessage(e)), type = "error")
+          NULL
+        })
+      detected_range(rng)
+    }, ignoreNULL = TRUE)
+
+    # Period selector: appears once files are uploaded, prefilled to the full
+    # detected range and editable to narrow the window.
+    output$period_ui <- renderUI({
+      rng <- detected_range()
+      if (is.null(rng)) {
+        return(helpText("Analysis period: upload the three monitor files to ",
+                        "detect the recording start and end."))
+      }
+      d0 <- as.Date(format(rng$min, tz = "UTC"))
+      d1 <- as.Date(format(rng$max, tz = "UTC"))
+      tagList(
+        div(style = "font-size:11px; color:#555; margin-bottom:6px;",
+            tags$b("Recording detected: "),
+            sprintf("%s  →  %s",
+                    format(rng$min, "%Y-%m-%d %H:%M", tz = "UTC"),
+                    format(rng$max, "%Y-%m-%d %H:%M", tz = "UTC"))),
+        splitLayout(
+          dateInput(ns("start_date"), "Start date", value = d0, min = d0, max = d1),
+          textInput(ns("start_time"), "Start time (HH:MM)",
+                    value = format(rng$min, "%H:%M", tz = "UTC"))
+        ),
+        splitLayout(
+          dateInput(ns("finish_date"), "End date", value = d1, min = d0, max = d1),
+          textInput(ns("finish_time"), "End time (HH:MM)",
+                    value = format(rng$max, "%H:%M", tz = "UTC"))
+        ),
+        actionButton(ns("reset_period"), "Reset to full range",
+                     icon = icon("rotate-left"), class = "btn-xs")
+      )
+    })
+
+    observeEvent(input$reset_period, {
+      rng <- detected_range(); req(rng)
+      updateDateInput(session, "start_date",
+                      value = as.Date(format(rng$min, tz = "UTC")))
+      updateTextInput(session, "start_time",
+                      value = format(rng$min, "%H:%M", tz = "UTC"))
+      updateDateInput(session, "finish_date",
+                      value = as.Date(format(rng$max, tz = "UTC")))
+      updateTextInput(session, "finish_time",
+                      value = format(rng$max, "%H:%M", tz = "UTC"))
+    })
+
     # -- Collect config from the "Run settings" form ----------------
+    # Build a "YYYY-MM-DD HH:MM:SS" string from a date input + HH:MM text.
+    build_datetime <- function(d, t) {
+      if (!isTruthy(d)) return(NULL)
+      t <- trimws(if (is.null(t)) "" else t)
+      if (!nzchar(t)) t <- "00:00"
+      if (grepl("^\\d{1,2}:\\d{2}$", t)) t <- paste0(t, ":00")   # HH:MM -> HH:MM:00
+      paste(as.character(d), t)
+    }
+
     form_config <- function() {
       list(
         channels              = parse_channels(input$channels),
-        start_datetime        = trimws(input$start_dt),
-        end_datetime          = trimws(input$end_dt),
-        tz                    = trimws(input$tz),
+        start_datetime        = build_datetime(input$start_date,  input$start_time),
+        end_datetime          = build_datetime(input$finish_date, input$finish_time),
+        tz                    = "UTC",
         lights_on             = trimws(input$lights_on),
         lights_off            = trimws(input$lights_off),
         death_threshold_hours = input$death_thr,
@@ -102,11 +183,16 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
       )
     }
 
-    add_configured_group <- function(label, color, paths) {
+    add_configured_group <- function(label, color, paths, period = NULL) {
       gid <- add_group(rv, label = label, color = color)
       g <- rv$groups[[gid]]
       g$monitor_paths <- paths
-      g$config <- modifyList(g$config, form_config())
+      cfg <- form_config()
+      if (!is.null(period)) {
+        cfg$start_datetime <- period$start
+        cfg$end_datetime   <- period$end
+      }
+      g$config <- modifyList(g$config, cfg)
       rv$groups[[gid]] <- g
       gid
     }
@@ -136,9 +222,16 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         showNotification("Sample data not found in inst/extdata.", type = "error")
         return()
       }
+      # Detect the sample recording's own full range so the demo works no matter
+      # what the (possibly empty) period inputs currently hold.
+      rng <- tryCatch(detect_datetime_range(unlist(paths), tz = "UTC"),
+                      error = function(e) NULL)
+      period <- if (is.null(rng)) NULL else list(
+        start = format(rng$min, "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+        end   = format(rng$max, "%Y-%m-%d %H:%M:%S", tz = "UTC"))
       add_configured_group(
         if (nzchar(input$label)) input$label else "Demo group",
-        input$color, paths)
+        input$color, paths, period = period)
       showNotification("Added demo group from bundled sample data.", type = "message")
     })
 

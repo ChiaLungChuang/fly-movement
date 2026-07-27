@@ -35,9 +35,9 @@ new_group <- function(group_id,
     monitor_paths = list(plug = NULL, middle = NULL, food = NULL),
     config = list(
       channels              = 1:32,
-      start_datetime        = NULL,
+      start_datetime        = NULL,   # detected from files (app) or set by caller
       end_datetime          = NULL,
-      tz                    = "America/Chicago",
+      tz                    = "UTC",   # parse timestamps as naive wall-clock
       lights_on             = "05:00:00",
       lights_off            = "17:00:00",
       death_threshold_hours = 12,
