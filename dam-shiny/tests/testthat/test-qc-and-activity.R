@@ -57,6 +57,32 @@ test_that("detect_datetime_range errors when files don't overlap", {
   expect_error(detect_datetime_range(c(d1, d2), tz = "UTC"), "overlap")
 })
 
+test_that("read_monitor_datetimes reads past a blank line (dropped reading)", {
+  # A bare fread() stops at the first blank line. On real data a single dropped
+  # reading mid-file truncated the period selector to everything before it.
+  p <- tempfile(fileext = ".txt")
+  row <- function(i, hh, mm) sprintf("%d\t1 Jan 26\t%02d:%02d:00\t0\tCt\t%s",
+                                     i, hh, mm, paste(rep(0, 32), collapse = "\t"))
+  writeLines(c(row(1, 0, 0), row(2, 0, 1), "",
+               row(3, 0, 2), row(4, 0, 3)), p)
+
+  dts <- read_monitor_datetimes(p, tz = "UTC")
+  expect_length(dts, 4)
+  expect_equal(format(max(dts), "%H:%M", tz = "UTC"), "00:03")
+})
+
+test_that("detect_datetime_range spans rows after a blank line", {
+  p1 <- tempfile(fileext = ".txt"); p2 <- tempfile(fileext = ".txt")
+  row <- function(i, hh, mm) sprintf("%d\t1 Jan 26\t%02d:%02d:00\t0\tCt\t%s",
+                                     i, hh, mm, paste(rep(0, 32), collapse = "\t"))
+  body <- c(row(1, 0, 0), row(2, 0, 1), "", row(3, 0, 2), row(4, 0, 3))
+  writeLines(body, p1); writeLines(body, p2)
+
+  r <- detect_datetime_range(c(p1, p2), tz = "UTC")
+  expect_equal(format(r$max, "%H:%M", tz = "UTC"), "00:03")  # not "00:01"
+  expect_equal(format(r$latest, "%H:%M", tz = "UTC"), "00:03")
+})
+
 test_that("parse_channels handles ranges, lists and clamping", {
   skip_if_not(exists("parse_channels"), "shiny not available")
   expect_equal(parse_channels("1:32"), 1:32)

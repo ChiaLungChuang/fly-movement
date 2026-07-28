@@ -202,10 +202,19 @@ read_position_monitors <- function(
 # Timestamps are parsed as naive wall-clock (tz = "UTC" by default) so the
 # date/time the user sees matches the file exactly, with no timezone shift.
 # The Case A/B detection mirrors read_one_monitor() above; keep them in sync.
+#
+# The read goes through .dam_read_raw() (R/00_dam_align.R) rather than a bare
+# fread(): fread() stops at the first blank line, so a single dropped reading
+# mid-file silently truncated the offered range to everything before it.
 # ============================================================
 
 read_monitor_datetimes <- function(path, tz = "UTC") {
-  dt <- fread(path, header = FALSE)
+  dt <- .dam_read_raw(path)$data
+
+  if (!nrow(dt) || ncol(dt) < 3) {
+    stop(sprintf("Cannot detect datetime format in '%s'. Check columns 2-6.",
+                 basename(path)))
+  }
 
   if (grepl("\\d{2}:\\d{2}:\\d{2}", dt[[3]][1])) {
     datetime_str <- paste(dt[[2]], dt[[3]])
@@ -213,7 +222,7 @@ read_monitor_datetimes <- function(path, tz = "UTC") {
                          "\\120\\2\\3", datetime_str)
     parsed <- dmy_hms(datetime_str, tz = tz)
 
-  } else if (grepl("\\d{2}:\\d{2}:\\d{2}", dt[[5]][1])) {
+  } else if (ncol(dt) >= 5 && grepl("\\d{2}:\\d{2}:\\d{2}", dt[[5]][1])) {
     year_str <- ifelse(nchar(as.character(dt[[4]])) == 2,
                        paste0("20", dt[[4]]),
                        as.character(dt[[4]]))
