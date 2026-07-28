@@ -124,3 +124,63 @@ test_that("group manager routes a misaligned group to the confirmation dialog", 
     })
   })
 })
+
+# -- guard: unusable monitor paths must never reach the aligner ---------------
+# request_run() built its check with c(plug=, middle=, food=), which flattens
+# to an atomic vector: a NULL path disappears rather than becoming an element,
+# so is.null(p) could never fire and a group missing one file arrived at
+# dam_plan_alignment() as a length-2 vector. That is not a loud failure --
+# the aligner diagnosed the two surviving files, pronounced them fine, and
+# alignment was skipped silently. Three NULLs gave length 0, where
+# any(logical(0)) is FALSE too. Only the empty-string case ever worked.
+#
+# Routing is asserted via queue(), which run_one() appends to before it
+# invokes the task -- the module's own record of "this group went to the
+# runner". Stubbing run_one() from inside testServer does not work: the
+# module's request_run() resolves run_one in the module environment, which a
+# rebinding in the test block does not reach.
+
+.unusable_path_cases <- list(
+  "one path NULL"  = list(plug = NULL, middle = "b.txt", food = "c.txt"),
+  "one path empty" = list(plug = "",   middle = "b.txt", food = "c.txt"),
+  "all three NULL" = list(plug = NULL, middle = NULL,    food = NULL)
+)
+
+for (.case in names(.unusable_path_cases)) local({
+  case  <- .case
+  paths <- .unusable_path_cases[[case]]
+
+  test_that(sprintf("request_run sends a group to run_one when %s", case), {
+    skip_if_not(requireNamespace("shiny", quietly = TRUE), "shiny not available")
+    skip_if_not(exists("mod_group_manager_server"), "module not sourced")
+
+    # Build the group fully before handing it to reactiveValues: a
+    # read-modify-write of rv$groups outside a reactive context fails.
+    g <- new_group("g1", case, "#0072B2")
+    g$monitor_paths <- paths
+    rv <- shiny::reactiveValues(groups = list(g1 = g), selected = NULL,
+                                log = character(0))
+
+    # Count aligner calls without changing its behaviour. The module closure
+    # resolves dam_plan_alignment lexically, so the global binding is the one
+    # request_run() sees.
+    planned <- 0L
+    orig    <- get("dam_plan_alignment", envir = globalenv())
+    assign("dam_plan_alignment",
+           function(...) { planned <<- planned + 1L; orig(...) },
+           envir = globalenv())
+    on.exit(assign("dam_plan_alignment", orig, envir = globalenv()), add = TRUE)
+
+    shiny::testServer(mod_group_manager_server, args = list(rv = rv), {
+      shiny::isolate({
+        # tryCatch tolerates the mock session's task invocation, which run_one()
+        # reaches only after it has already recorded the group in queue().
+        tryCatch(request_run("g1"), error = function(e) NULL)
+        expect_equal(queue(), "g1")        # routed to run_one()
+        expect_length(pending_gids(), 0)   # and no confirmation modal
+      })
+    })
+
+    expect_equal(planned, 0L)   # never reached dam_plan_alignment()
+  })
+})

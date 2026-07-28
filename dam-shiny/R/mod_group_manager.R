@@ -345,16 +345,31 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     pending_gids  <- reactiveVal(character(0))   # gids awaiting confirmation
     pending_plans <- reactiveVal(list())         # gid -> alignment plan
 
+    # The three monitor roles, in the order the engine expects them.
+    dam_roles <- c("plug", "middle", "food")
+
+    # Usable == exactly one non-empty, non-NA path. Checked on the LIST, never
+    # on c(...): c() flattens to an atomic vector, so a NULL path vanishes
+    # instead of becoming an element. The old guard tested the flattened
+    # vector, which meant is.null(p) could never be TRUE (dead code) and a
+    # group missing one file produced a length-2 vector that sailed past
+    # any(...) into dam_plan_alignment() -- which diagnosed the two surviving
+    # files, reported them fine, and skipped alignment silently. Three NULLs
+    # produced length 0, where any(logical(0)) is also FALSE.
+    dam_paths_usable <- function(monitor_paths) {
+      vapply(monitor_paths[dam_roles], function(p) {
+        length(p) == 1L && !is.na(p) && nzchar(p)
+      }, logical(1))
+    }
+
     request_run <- function(gids) {
       plans <- list(); need <- character(0)
       for (gid in gids) {
         g  <- rv$groups[[gid]]
-        mf <- c(plug   = g$monitor_paths$plug,
-                middle = g$monitor_paths$middle,
-                food   = g$monitor_paths$food)
-        if (any(vapply(mf, function(p) is.null(p) || !nzchar(p), logical(1)))) {
+        if (!all(dam_paths_usable(g$monitor_paths))) {
           run_one(gid); next                      # let the engine report missing files
         }
+        mf <- vapply(g$monitor_paths[dam_roles], as.character, character(1))
         plan <- tryCatch(dam_plan_alignment(mf), error = function(e) NULL)
         if (is.null(plan)) { run_one(gid); next }  # unreadable -> let the engine report
         if (isTRUE(plan$needs_alignment)) {
