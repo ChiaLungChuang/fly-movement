@@ -238,6 +238,25 @@ read_monitor_datetimes <- function(path, tz = "UTC") {
   parsed[!is.na(parsed)]
 }
 
+# Returns FOUR fields, two of which are a trap if you pick the wrong pair:
+#
+#   min / max            the INTERSECTED window -- the span every monitor
+#                        covers. This is the UI-facing pair, and the only
+#                        one anything in R/ reads. It matches what survives
+#                        dam_plan_alignment(), which trims all monitors to
+#                        the earliest-ending one, so offering it never lets
+#                        the user select data alignment is about to discard.
+#
+#   earliest / latest    the widest RAW extent across files. Read NOWHERE in
+#                        R/ -- retained for diagnostics only. On a staggered
+#                        set this runs past the aligned window, so wiring it
+#                        into the period selector would reintroduce exactly
+#                        the bug the selector tests guard against.
+#
+# The two pairs are equal whenever the monitors share a start and an end,
+# which is true of every file set in this repo -- so a mix-up will not show
+# up in casual testing. test-group-manager-server.R pins the rendered UI to
+# min/max against a synthetic staggered fixture; keep that test honest.
 detect_datetime_range <- function(monitor_files, tz = "UTC") {
   if (length(monitor_files) == 0) stop("No monitor files provided.")
 

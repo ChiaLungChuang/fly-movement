@@ -1,10 +1,57 @@
 # ============================================================
 # R/00_dam_align.R  --  DAM file alignment (vendored from damalignr)
 #
+# ---- PROVENANCE ----
+#   Source repo : https://github.com/ChiaLungChuang/damalignr
+#   Commit      : 4c73a76f8932c820b10fe8c702b04cd9db0615d8  (2026-07-08,
+#                 "Initial commit: damalignr package + Shiny aligner app")
+#   Vendored    : 2026-07-23 (this repo's commit 68ea306)
+#   Status      : ADAPTED, not verbatim -- do not expect a clean diff.
+#
+# Verified on 2026-07-28 against that commit, function body by function
+# body (parse + deparse, so formatting and comments were not compared).
+# What the check found:
+#
+#   identical to upstream
+#     .dam_read_raw       <- read_dam_raw
+#     .dam_subrow_order   <- .subrow_order
+#     %||%                <- %||%
+#
+#   adapted, same behaviour -- `file_paths` -> `roles` for labelling,
+#   sapply -> vapply, cat() progress chatter removed (the app shows a
+#   confirmation modal instead), errors reworded with call. = FALSE
+#     .dam_subrow_mismatches   <- .diagnose_subrow_mismatches
+#     .dam_first_misalignment  <- .diagnose_alignment
+#     .dam_trim_to_common_end  <- trim_to_common_end
+#     .dam_nearest_template    <- .nearest_template
+#     .dam_match_final         <- match_final_timestamp_rows
+#
+#   adapted, behaviour deliberately changed
+#     .dam_filter_start <- filter_start
+#         upstream takes a file path and re-reads it, matching on V1+V2+V3;
+#         this takes an in-memory data.table and matches on V2+V3 only (V1
+#         has been renumbered by the time it is called).
+#     .dam_repair_missing_subrows <- repair_missing_subrows
+#         `verbose` dropped; insert count accumulated and returned as
+#         attr(out, "n_inserted"), which the modal reports.
+#
+#   no upstream counterpart -- written for this app, replacing upstream's
+#   diagnose_monitor_files() (prints, returns a data.table with attributes)
+#   and process_monitor_files() (writes *_processed.txt beside the inputs)
+#     .dam_diagnose_list, .dam_parse_ts, dam_plan_alignment, dam_write_aligned
+#
+#   present upstream, intentionally not vendored
+#     diagnose_monitor_files, process_monitor_files, run_aligner_app
+#
+# So: the primitives above are current as of 4c73a76, but this file cannot
+# be refreshed by copying upstream over it. To check for staleness, diff
+# the named upstream functions against their counterparts here and re-apply
+# the adaptations. At the time of verification 4c73a76 was the only commit
+# in the upstream repo and matched origin/main.
+#
 # Self-contained copy of the damalignr alignment engine, vendored into
 # this app so it deploys with the Docker/renv image without a dependency
-# on the (private) damalignr GitHub package. Source of truth:
-#   https://github.com/ChiaLungChuang/damalignr  (commit 4c73a76)
+# on the (private) damalignr GitHub package.
 #
 # Public entry points used by the app:
 #   dam_plan_alignment(mf)         -> diagnose + (if needed) align IN MEMORY,
