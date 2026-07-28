@@ -8,18 +8,23 @@
 #   Vendored    : 2026-07-23 (this repo's commit 68ea306)
 #   Status      : ADAPTED, not verbatim -- do not expect a clean diff.
 #
-# Verified on 2026-07-28 against that commit, function body by function
-# body (parse + deparse, so formatting and comments were not compared).
-# What the check found:
+# Verified on 2026-07-28 against that commit, comparing every function
+# definition on both sides (parse + deparse, so formatting and comments
+# were NOT compared). All 14 definitions here and all 13 upstream are
+# accounted for below. What the check found:
 #
 #   identical to upstream
 #     .dam_read_raw       <- read_dam_raw
 #     .dam_subrow_order   <- .subrow_order
 #     %||%                <- %||%
 #
-#   adapted, same behaviour -- `file_paths` -> `roles` for labelling,
-#   sapply -> vapply, cat() progress chatter removed (the app shows a
-#   confirmation modal instead), errors reworded with call. = FALSE
+#   adapted, no behaviour change that inspection could find. The changes
+#   across this group, though not every one applies to every function:
+#   `file_paths` -> `roles` for labelling, sapply -> vapply,
+#   nrow(d) == 0 -> !nrow(d), cat() progress chatter removed (the app
+#   shows a confirmation modal instead), errors reworded with
+#   call. = FALSE. NB: equivalence here was judged by reading the
+#   normalised diffs, NOT by running both versions on the same inputs.
 #     .dam_subrow_mismatches   <- .diagnose_subrow_mismatches
 #     .dam_first_misalignment  <- .diagnose_alignment
 #     .dam_trim_to_common_end  <- trim_to_common_end
@@ -28,26 +33,71 @@
 #
 #   adapted, behaviour deliberately changed
 #     .dam_filter_start <- filter_start
-#         upstream takes a file path and re-reads it, matching on V1+V2+V3;
-#         this takes an in-memory data.table and matches on V2+V3 only (V1
-#         has been renumbered by the time it is called).
+#         Upstream takes a file path, re-reads it, and matches on
+#         V1+V2+V3, where start_values is supplied by the caller. This
+#         takes an already-read data.table and matches on V2+V3 only.
+#         The reason is the start key, not the data: dam_plan_alignment()
+#         derives start_key as a TIMESTAMP from the reference monitor
+#         (the latest first-timestamp) and applies it to all three
+#         monitors. Each monitor carries its own index at that instant --
+#         the late starter is at V1=1 there while the others are already
+#         well into their files -- so matching on V1 would be wrong
+#         across files by construction. Upstream does not hit this
+#         because its start_values is user-supplied and must be present
+#         verbatim in every file; when it is not, filter_start() stop()s
+#         rather than mismatching silently.
+#
+#         (An earlier revision of this header claimed V1 had been
+#         renumbered by repair by the time the filter runs. That was
+#         wrong -- see the call-order note below -- and is corrected
+#         here rather than by rewriting the pushed commit 07fbd7c.)
 #     .dam_repair_missing_subrows <- repair_missing_subrows
 #         `verbose` dropped; insert count accumulated and returned as
-#         attr(out, "n_inserted"), which the modal reports.
+#         attr(out, "n_inserted"). dam_plan_alignment() folds that count
+#         into plan$report, which the confirmation modal renders.
 #
 #   no upstream counterpart -- written for this app, replacing upstream's
 #   diagnose_monitor_files() (prints, returns a data.table with attributes)
 #   and process_monitor_files() (writes *_processed.txt beside the inputs)
 #     .dam_diagnose_list, .dam_parse_ts, dam_plan_alignment, dam_write_aligned
 #
-#   present upstream, intentionally not vendored
+#   present upstream, not vendored -- these are the print/write/CLI layer
+#   that the two entry points above replace
 #     diagnose_monitor_files, process_monitor_files, run_aligner_app
 #
-# So: the primitives above are current as of 4c73a76, but this file cannot
-# be refreshed by copying upstream over it. To check for staleness, diff
-# the named upstream functions against their counterparts here and re-apply
-# the adaptations. At the time of verification 4c73a76 was the only commit
-# in the upstream repo and matched origin/main.
+# ---- CALL ORDER, AND A HAZARD THAT IS NOT LIVE TODAY ----
+#
+# Both pipelines order the steps the same way, verified by tracing
+# upstream at runtime on 2026-07-28:
+#
+#   filter -> trim to common end -> repair sub-rows -> match final minute
+#
+# So neither side ever filters on repaired data. Upstream is doubly
+# insulated: filter_start() re-reads from disk, so it would see pristine
+# V1 even if the steps were reordered.
+#
+# The hazard, recorded because it would be easy to lose: upstream's
+# repair does not renumber V1, it inserts a row carrying the sibling's
+# index, so a repaired table holds DUPLICATE V1 values (1,2,3,4,5,5,6...
+# observed on a synthetic dropped-sub-row fixture). Any future refactor
+# that fed repaired data to a V1-matching filter would therefore get two
+# hits and resolve them silently via start_row[1]. Both hits sit at the
+# same timestamp, so the damage would be a one-row off-by-one rather
+# than a wildly wrong start -- silent either way. Not a defect in either
+# codebase as they stand; relevant if the pipelines are ever merged.
+#
+# ---- CHECKING FOR STALENESS ----
+#
+# The primitives above are current as of 4c73a76, but this file cannot be
+# refreshed by copying upstream over it -- the adaptations would be lost.
+# To re-check, run the harness (see tools/vendor_diff.R for options):
+#
+#   Rscript dam-shiny/tools/vendor_diff.R /path/to/damalignr
+#
+# It reprints the classification above and exits non-zero if anything
+# listed as identical has drifted. At the time of verification 4c73a76
+# was the only commit in the upstream repo; origin was checked live with
+# `git ls-remote` because the local FETCH_HEAD was 5 days stale.
 #
 # Self-contained copy of the damalignr alignment engine, vendored into
 # this app so it deploys with the Docker/renv image without a dependency
