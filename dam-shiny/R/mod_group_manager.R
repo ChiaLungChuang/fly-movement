@@ -272,6 +272,7 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
 
     observeEvent(input$remove, {
       gid <- selected_gid(); req(gid)
+      dam_cache_drop(gid)          # don't strand the group's aligned temps
       remove_group(rv, gid)
     })
 
@@ -322,14 +323,30 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     # a hard worker failure (where no payload comes back) to the right group.
     queue <- reactiveVal(character(0))
 
-    run_one <- function(gid) {
+    # The three monitor roles, in the order the engine expects them.
+    dam_roles <- c("plug", "middle", "food")
+
+    # Build the payload handed to the worker. `aligned`, when supplied, is a
+    # named character vector of temp paths that REPLACES monitor_paths for
+    # this run only -- the group's own record keeps pointing at the user's
+    # uploads. Split out from run_one() so the substitution can be asserted
+    # directly; run_task$invoke() cannot be intercepted from a test.
+    dam_lean_group <- function(g, aligned = NULL) {
+      lean <- g[c("id", "label", "color", "monitor_paths", "config")]
+      if (!is.null(aligned)) {
+        lean$monitor_paths <- as.list(aligned[dam_roles])
+      }
+      lean
+    }
+
+    run_one <- function(gid, aligned = NULL) {
       g <- rv$groups[[gid]]
       g$status <- "queued"; g$error <- NULL
       rv$groups[[gid]] <- g
       append_log(rv, sprintf("\n===== Queued group: %s =====", g$label))
 
       # Send only what the pipeline needs — never the (large) result fields.
-      lean <- g[c("id", "label", "color", "monitor_paths", "config")]
+      lean <- dam_lean_group(g, aligned)
       queue(c(queue(), gid))
       run_task$invoke(gid = gid, group = lean, app_root = app_root)
     }
@@ -345,9 +362,6 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     pending_gids  <- reactiveVal(character(0))   # gids awaiting confirmation
     pending_plans <- reactiveVal(list())         # gid -> alignment plan
 
-    # The three monitor roles, in the order the engine expects them.
-    dam_roles <- c("plug", "middle", "food")
-
     # Usable == exactly one non-empty, non-NA path. Checked on the LIST, never
     # on c(...): c() flattens to an atomic vector, so a NULL path vanishes
     # instead of becoming an element. The old guard tested the flattened
@@ -362,12 +376,68 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
       }, logical(1))
     }
 
+    # -- aligned-path cache ------------------------------------------
+    # gid -> list(key = fingerprint of the ORIGINAL uploads, paths = temps).
+    # Confirming alignment is a per-group decision, so remember the answer:
+    # without this, every run of a misaligned group re-diagnoses the originals
+    # and re-raises the dialog, which trains users to click through the one
+    # dialog whose whole value is that it gets read.
+    #
+    # The group's own monitor_paths are never rewritten -- the temps live here
+    # and are passed to run_one() per run, so a group keeps describing what
+    # the user actually uploaded.
+    aligned_cache <- reactiveVal(list())
+
+    dam_path_key <- function(monitor_paths) {
+      paste(vapply(monitor_paths[dam_roles], function(p) {
+        if (length(p) == 1L && !is.na(p)) as.character(p) else ""
+      }, character(1)), collapse = "\r")
+    }
+
+    dam_cache_drop <- function(gid) {
+      cur <- aligned_cache()
+      if (!is.null(cur[[gid]])) { cur[[gid]] <- NULL; aligned_cache(cur) }
+      invisible()
+    }
+
+    dam_cache_put <- function(gid, monitor_paths, paths) {
+      cur <- aligned_cache()
+      cur[[gid]] <- list(key = dam_path_key(monitor_paths), paths = paths)
+      aligned_cache(cur)
+    }
+
+    # Returns the cached temp paths, or NULL after dropping a stale entry.
+    # Two ways an entry goes stale:
+    #   - the originals changed, so the plan was computed against other files
+    #     (not reachable from the UI today, which makes a new group per upload;
+    #      cheap to check, and silently reusing a foreign plan would be ugly);
+    #   - a temp file is gone. tempdir() is not guaranteed to survive a long
+    #     session, and handing the worker a path that no longer exists would
+    #     turn a stale cache into a run failure.
+    # Either way the caller falls back to re-planning, which is always correct
+    # -- just slower, and it re-asks.
+    dam_cache_get <- function(gid, monitor_paths) {
+      ent <- aligned_cache()[[gid]]
+      if (is.null(ent)) return(NULL)
+      if (!identical(ent$key, dam_path_key(monitor_paths))) {
+        dam_cache_drop(gid); return(NULL)
+      }
+      if (!all(nzchar(ent$paths)) || !all(file.exists(ent$paths))) {
+        dam_cache_drop(gid); return(NULL)
+      }
+      ent$paths
+    }
+
     request_run <- function(gids) {
       plans <- list(); need <- character(0)
       for (gid in gids) {
         g  <- rv$groups[[gid]]
         if (!all(dam_paths_usable(g$monitor_paths))) {
           run_one(gid); next                      # let the engine report missing files
+        }
+        cached <- dam_cache_get(gid, g$monitor_paths)
+        if (!is.null(cached)) {
+          run_one(gid, aligned = cached); next    # already confirmed: don't re-ask
         }
         mf <- vapply(g$monitor_paths[dam_roles], as.character, character(1))
         plan <- tryCatch(dam_plan_alignment(mf), error = function(e) NULL)
@@ -427,14 +497,18 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
           next
         }
         g <- rv$groups[[gid]]
-        g$monitor_paths <- list(plug   = unname(paths["plug"]),
-                                middle = unname(paths["middle"]),
-                                food   = unname(paths["food"]))
-        rv$groups[[gid]] <- g
+        # Deliberately NOT written back into g$monitor_paths: the group keeps
+        # describing the user's uploads, and the temp paths travel with the
+        # run instead (see dam_lean_group()). Cached so a re-run of this group
+        # does not raise the dialog again.
+        aligned <- c(plug   = unname(paths["plug"]),
+                     middle = unname(paths["middle"]),
+                     food   = unname(paths["food"]))
+        dam_cache_put(gid, g$monitor_paths, aligned)
         append_log(rv, c(sprintf("\n----- Aligned '%s' before run -----", g$label),
                          plan$report))
         showNotification(sprintf("Aligned '%s'; running.", g$label), type = "message")
-        run_one(gid)
+        run_one(gid, aligned = aligned)
       }
       pending_gids(character(0)); pending_plans(list())
     })

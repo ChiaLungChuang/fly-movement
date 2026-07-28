@@ -184,3 +184,114 @@ for (.case in names(.unusable_path_cases)) local({
     expect_equal(planned, 0L)   # never reached dam_plan_alignment()
   })
 })
+
+
+# -- confirming alignment must not repoint the group at temp files -----------
+# The confirm handler used to do g$monitor_paths <- list(<temps>), so the group
+# permanently described files under tempdir() instead of the user's uploads.
+# Now the temps travel with the run (dam_lean_group) and are cached per gid so
+# the dialog is asked once rather than on every run.
+
+test_that("confirming alignment leaves monitor_paths on the originals", {
+  skip_if_not(requireNamespace("shiny", quietly = TRUE), "shiny not available")
+  skip_if_not(exists("mod_group_manager_server"), "module not sourced")
+
+  a <- .tmp(); b <- .tmp(); cc <- .tmp()
+  .write_dam(a, n_min = 20)
+  .write_dam(b, n_min = 20, drop_v4_at = 8, blank_after_drop = TRUE)
+  .write_dam(cc, n_min = 20)
+  on.exit(unlink(c(a, b, cc)), add = TRUE)
+
+  originals <- list(plug = a, middle = b, food = cc)
+  g <- new_group("g1", "Misaligned", "#0072B2")
+  g$monitor_paths <- originals
+  rv <- shiny::reactiveValues(groups = list(g1 = g), selected = NULL,
+                              log = character(0))
+
+  # Count aligner calls, and capture the temps the writer produced, through the
+  # global bindings the module resolves.
+  planned  <- 0L
+  written  <- NULL
+  orig_plan  <- get("dam_plan_alignment", envir = globalenv())
+  orig_write <- get("dam_write_aligned",  envir = globalenv())
+  assign("dam_plan_alignment",
+         function(...) { planned <<- planned + 1L; orig_plan(...) },
+         envir = globalenv())
+  assign("dam_write_aligned",
+         function(...) { written <<- orig_write(...); written },
+         envir = globalenv())
+  on.exit({
+    assign("dam_plan_alignment", orig_plan,  envir = globalenv())
+    assign("dam_write_aligned",  orig_write, envir = globalenv())
+  }, add = TRUE)
+
+  shiny::testServer(mod_group_manager_server, args = list(rv = rv), {
+    shiny::isolate(tryCatch(request_run("g1"), error = function(e) NULL))
+    expect_true("g1" %in% pending_gids())          # held at the dialog
+    expect_equal(planned, 1L)
+
+    # Confirm.
+    tryCatch(session$setInputs(dam_confirm_align = 1), error = function(e) NULL)
+
+    # 1. the group still points at what the user uploaded
+    expect_equal(rv$groups$g1$monitor_paths, originals)
+
+    # 2. the run got the temps instead. dam_lean_group() is the payload handed
+    #    to run_task$invoke(); assert on it directly, since the task itself
+    #    cannot be intercepted from here.
+    cached <- shiny::isolate(aligned_cache())[["g1"]]$paths
+    expect_false(is.null(cached))
+    expect_equal(unname(cached), unname(unlist(written)))
+    expect_true(all(file.exists(cached)))
+
+    lean <- dam_lean_group(rv$groups$g1, aligned = cached)
+    expect_equal(unlist(lean$monitor_paths, use.names = FALSE), unname(cached))
+    expect_false(identical(unlist(lean$monitor_paths, use.names = FALSE),
+                           unlist(originals, use.names = FALSE)))
+
+    # 3. a second run reuses the cache: no re-plan, no dialog
+    pending_gids(character(0))
+    shiny::isolate(tryCatch(request_run("g1"), error = function(e) NULL))
+    expect_equal(planned, 1L)                      # NOT re-planned
+    expect_length(pending_gids(), 0)               # dialog not re-raised
+
+    # 4. a cached temp that has vanished falls back to re-planning rather than
+    #    handing the worker a dead path
+    unlink(cached[[1]])
+    expect_false(all(file.exists(cached)))
+    pending_gids(character(0))
+    shiny::isolate(tryCatch(request_run("g1"), error = function(e) NULL))
+    expect_equal(planned, 2L)                      # re-planned
+    expect_true("g1" %in% pending_gids())          # and asked again
+    expect_null(shiny::isolate(aligned_cache())[["g1"]])   # stale entry dropped
+  })
+})
+
+test_that("the aligned-path cache drops entries when the originals change", {
+  skip_if_not(requireNamespace("shiny", quietly = TRUE), "shiny not available")
+  skip_if_not(exists("mod_group_manager_server"), "module not sourced")
+
+  a <- .tmp(); b <- .tmp(); cc <- .tmp()
+  for (p in c(a, b, cc)) .write_dam(p, n_min = 5)
+  on.exit(unlink(c(a, b, cc)), add = TRUE)
+
+  g <- new_group("g1", "G", "#0072B2")
+  g$monitor_paths <- list(plug = a, middle = b, food = cc)
+  rv <- shiny::reactiveValues(groups = list(g1 = g), selected = NULL,
+                              log = character(0))
+
+  shiny::testServer(mod_group_manager_server, args = list(rv = rv), {
+    shiny::isolate({
+      dam_cache_put("g1", rv$groups$g1$monitor_paths,
+                    c(plug = a, middle = b, food = cc))
+      expect_equal(unname(dam_cache_get("g1", rv$groups$g1$monitor_paths)),
+                   c(a, b, cc))
+
+      # Same gid, different uploads -> the cached plan was computed against
+      # other files, so it must not be reused.
+      changed <- list(plug = cc, middle = b, food = a)
+      expect_null(dam_cache_get("g1", changed))
+      expect_null(aligned_cache()[["g1"]])
+    })
+  })
+})
