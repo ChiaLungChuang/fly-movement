@@ -24,8 +24,10 @@ Fastest way to see it work: on the **Groups** tab press **Add demo group**
 ## Tabs
 
 1. **Groups** — add a group (3 monitor files + label/color), set the run
-   config (dates, timezone, lights on/off, channels, thresholds, bout window,
-   anchor toggle), and **Run selected** / **Run all pending**. Status table +
+   config (lights on/off, channels, thresholds, bout window, anchor toggle),
+   and **Run selected** / **Run all pending**. The **analysis period** is
+   detected automatically from the earliest/latest timestamps in the uploaded
+   files and can be narrowed with the date/time pickers. Status table +
    collapsible engine log.
 2. **Data & QC** — per group: dead channels, UNKNOWN diagnostics, transit-type
    distribution, anchor-confidence summary.
@@ -69,10 +71,15 @@ dam-shiny/
 ## Configuration
 
 `config.yml` holds the non-secret defaults that prefill the **Run settings**
-form (timezone, lights on/off, thresholds, upload limit). It's read by a
+form (lights on/off, channels, thresholds, upload limit). It's read by a
 minimal built-in parser in `R/app_config.R` — no `{config}` package needed.
 Pick an alternate profile with the `DAM_CONFIG_PROFILE` environment variable;
 missing keys fall back to `default`, then to hardcoded values.
+
+The **analysis period is not configured here** — it is detected from the
+uploaded files. Timestamps are parsed as naive wall-clock (`tz` is internal,
+fixed to `UTC`), so the dates/times shown always match the files with no
+timezone shift; there is no timezone control in the UI.
 
 ## Async runs
 
@@ -132,7 +139,10 @@ session temp files.
 ## Engine changes (backward-compatible with the batch `run_*.R` scripts)
 
 - `read_position_monitors()` takes a `tz` argument (default `America/Chicago`)
-  instead of hardcoding the timezone.
+  instead of hardcoding the timezone; the app passes `tz = "UTC"`.
+- `read_monitor_datetimes()` / `detect_datetime_range()` (in `01_read_qc.R`)
+  parse just the datetime column to find a file set's overlapping recording
+  window — used by the Groups tab to auto-fill the analysis period.
 - The `plot_*` functions skip `ggsave` and just return the ggplot when
   `output_file = NULL`; the file-saving path is unchanged for the scripts.
 - Activity logic from `run_activity.R` is extracted into functions in

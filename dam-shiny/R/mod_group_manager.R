@@ -41,9 +41,11 @@ mod_group_manager_ui <- function(id) {
       box(
         title = "Run settings (applied to new groups)", width = 4, status = "primary",
         solidHeader = TRUE,
-        textInput(ns("start_dt"), "Start datetime", cfg$start_datetime),
-        textInput(ns("end_dt"),   "End datetime",   cfg$end_datetime),
-        textInput(ns("tz"),       "Timezone",       cfg$tz),
+        # Analysis period — auto-detected from the uploaded files' earliest and
+        # latest timestamps; editable to narrow the window. No timezone: the
+        # date/time shown is read straight from the files (parsed as UTC).
+        uiOutput(ns("period_ui")),
+        tags$hr(style = "margin:8px 0"),
         splitLayout(
           textInput(ns("lights_on"),  "Lights on",  cfg$lights_on),
           textInput(ns("lights_off"), "Lights off", cfg$lights_off)
@@ -85,13 +87,92 @@ mod_group_manager_ui <- function(id) {
 mod_group_manager_server <- function(id, rv, parent = NULL) {
   moduleServer(id, function(input, output, session) {
 
+    ns <- session$ns
+
+    # -- Detect the recording period from the uploaded files ---------
+    # (all timestamps parsed as UTC / naive wall-clock, so what the user
+    #  sees matches the files exactly).
+    uploaded_paths <- reactive({
+      if (isTruthy(input$plug) && isTruthy(input$middle) && isTruthy(input$food)) {
+        c(plug   = input$plug$datapath,
+          middle = input$middle$datapath,
+          food   = input$food$datapath)
+      } else NULL
+    })
+
+    detected_range <- reactiveVal(NULL)
+
+    observeEvent(uploaded_paths(), {
+      paths <- uploaded_paths(); req(paths)
+      rng <- tryCatch(
+        detect_datetime_range(paths, tz = "UTC"),
+        error = function(e) {
+          showNotification(paste("Could not read dates from the files:",
+                                 conditionMessage(e)), type = "error")
+          NULL
+        })
+      detected_range(rng)
+    }, ignoreNULL = TRUE)
+
+    # Period selector: appears once files are uploaded, prefilled to the full
+    # detected range and editable to narrow the window.
+    output$period_ui <- renderUI({
+      rng <- detected_range()
+      if (is.null(rng)) {
+        return(helpText("Analysis period: upload the three monitor files to ",
+                        "detect the recording start and end."))
+      }
+      d0 <- as.Date(format(rng$min, tz = "UTC"))
+      d1 <- as.Date(format(rng$max, tz = "UTC"))
+      tagList(
+        div(style = "font-size:11px; color:#555; margin-bottom:6px;",
+            tags$b("Recording detected: "),
+            sprintf("%s  →  %s",
+                    format(rng$min, "%Y-%m-%d %H:%M", tz = "UTC"),
+                    format(rng$max, "%Y-%m-%d %H:%M", tz = "UTC"))),
+        splitLayout(
+          dateInput(ns("start_date"), "Start date", value = d0, min = d0, max = d1),
+          textInput(ns("start_time"), "Start time (HH:MM)",
+                    value = format(rng$min, "%H:%M", tz = "UTC"))
+        ),
+        splitLayout(
+          dateInput(ns("finish_date"), "End date", value = d1, min = d0, max = d1),
+          textInput(ns("finish_time"), "End time (HH:MM)",
+                    value = format(rng$max, "%H:%M", tz = "UTC"))
+        ),
+        actionButton(ns("reset_period"), "Reset to full range",
+                     icon = icon("rotate-left"), class = "btn-xs")
+      )
+    })
+
+    observeEvent(input$reset_period, {
+      rng <- detected_range(); req(rng)
+      updateDateInput(session, "start_date",
+                      value = as.Date(format(rng$min, tz = "UTC")))
+      updateTextInput(session, "start_time",
+                      value = format(rng$min, "%H:%M", tz = "UTC"))
+      updateDateInput(session, "finish_date",
+                      value = as.Date(format(rng$max, tz = "UTC")))
+      updateTextInput(session, "finish_time",
+                      value = format(rng$max, "%H:%M", tz = "UTC"))
+    })
+
     # -- Collect config from the "Run settings" form ----------------
+    # Build a "YYYY-MM-DD HH:MM:SS" string from a date input + HH:MM text.
+    build_datetime <- function(d, t) {
+      if (!isTruthy(d)) return(NULL)
+      t <- trimws(if (is.null(t)) "" else t)
+      if (!nzchar(t)) t <- "00:00"
+      if (grepl("^\\d{1,2}:\\d{2}$", t)) t <- paste0(t, ":00")   # HH:MM -> HH:MM:00
+      paste(as.character(d), t)
+    }
+
     form_config <- function() {
       list(
         channels              = parse_channels(input$channels),
-        start_datetime        = trimws(input$start_dt),
-        end_datetime          = trimws(input$end_dt),
-        tz                    = trimws(input$tz),
+        start_datetime        = build_datetime(input$start_date,  input$start_time),
+        end_datetime          = build_datetime(input$finish_date, input$finish_time),
+        tz                    = "UTC",
         lights_on             = trimws(input$lights_on),
         lights_off            = trimws(input$lights_off),
         death_threshold_hours = input$death_thr,
@@ -102,11 +183,16 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
       )
     }
 
-    add_configured_group <- function(label, color, paths) {
+    add_configured_group <- function(label, color, paths, period = NULL) {
       gid <- add_group(rv, label = label, color = color)
       g <- rv$groups[[gid]]
       g$monitor_paths <- paths
-      g$config <- modifyList(g$config, form_config())
+      cfg <- form_config()
+      if (!is.null(period)) {
+        cfg$start_datetime <- period$start
+        cfg$end_datetime   <- period$end
+      }
+      g$config <- modifyList(g$config, cfg)
       rv$groups[[gid]] <- g
       gid
     }
@@ -136,9 +222,16 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         showNotification("Sample data not found in inst/extdata.", type = "error")
         return()
       }
+      # Detect the sample recording's own full range so the demo works no matter
+      # what the (possibly empty) period inputs currently hold.
+      rng <- tryCatch(detect_datetime_range(unlist(paths), tz = "UTC"),
+                      error = function(e) NULL)
+      period <- if (is.null(rng)) NULL else list(
+        start = format(rng$min, "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+        end   = format(rng$max, "%Y-%m-%d %H:%M:%S", tz = "UTC"))
       add_configured_group(
         if (nzchar(input$label)) input$label else "Demo group",
-        input$color, paths)
+        input$color, paths, period = period)
       showNotification("Added demo group from bundled sample data.", type = "message")
     })
 
@@ -179,6 +272,7 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
 
     observeEvent(input$remove, {
       gid <- selected_gid(); req(gid)
+      dam_cache_drop(gid)          # don't strand the group's aligned temps
       remove_group(rv, gid)
     })
 
@@ -229,17 +323,195 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     # a hard worker failure (where no payload comes back) to the right group.
     queue <- reactiveVal(character(0))
 
-    run_one <- function(gid) {
+    # The three monitor roles, in the order the engine expects them.
+    dam_roles <- c("plug", "middle", "food")
+
+    # Build the payload handed to the worker. `aligned`, when supplied, is a
+    # named character vector of temp paths that REPLACES monitor_paths for
+    # this run only -- the group's own record keeps pointing at the user's
+    # uploads. Split out from run_one() so the substitution can be asserted
+    # directly; run_task$invoke() cannot be intercepted from a test.
+    dam_lean_group <- function(g, aligned = NULL) {
+      lean <- g[c("id", "label", "color", "monitor_paths", "config")]
+      if (!is.null(aligned)) {
+        lean$monitor_paths <- as.list(aligned[dam_roles])
+      }
+      lean
+    }
+
+    run_one <- function(gid, aligned = NULL) {
       g <- rv$groups[[gid]]
       g$status <- "queued"; g$error <- NULL
       rv$groups[[gid]] <- g
       append_log(rv, sprintf("\n===== Queued group: %s =====", g$label))
 
       # Send only what the pipeline needs — never the (large) result fields.
-      lean <- g[c("id", "label", "color", "monitor_paths", "config")]
+      lean <- dam_lean_group(g, aligned)
       queue(c(queue(), gid))
       run_task$invoke(gid = gid, group = lean, app_root = app_root)
     }
+
+    # -- damalignr pre-check + confirmation dialog ------------------
+    # Before a run, diagnose each group's 3 monitor files (via the vendored
+    # engine in R/00_dam_align.R). Files that are already aligned run
+    # immediately; files that need alignment (staggered start/end, partial
+    # final minute, or a mid-file dropped sub-row that a bare read would
+    # truncate on) are held behind a confirmation dialog showing exactly what
+    # will change. Original uploads are never modified -- alignment writes new
+    # temp files used only for the run.
+    pending_gids  <- reactiveVal(character(0))   # gids awaiting confirmation
+    pending_plans <- reactiveVal(list())         # gid -> alignment plan
+
+    # Usable == exactly one non-empty, non-NA path. Checked on the LIST, never
+    # on c(...): c() flattens to an atomic vector, so a NULL path vanishes
+    # instead of becoming an element. The old guard tested the flattened
+    # vector, which meant is.null(p) could never be TRUE (dead code) and a
+    # group missing one file produced a length-2 vector that sailed past
+    # any(...) into dam_plan_alignment() -- which diagnosed the two surviving
+    # files, reported them fine, and skipped alignment silently. Three NULLs
+    # produced length 0, where any(logical(0)) is also FALSE.
+    dam_paths_usable <- function(monitor_paths) {
+      vapply(monitor_paths[dam_roles], function(p) {
+        length(p) == 1L && !is.na(p) && nzchar(p)
+      }, logical(1))
+    }
+
+    # -- aligned-path cache ------------------------------------------
+    # gid -> list(key = fingerprint of the ORIGINAL uploads, paths = temps).
+    # Confirming alignment is a per-group decision, so remember the answer:
+    # without this, every run of a misaligned group re-diagnoses the originals
+    # and re-raises the dialog, which trains users to click through the one
+    # dialog whose whole value is that it gets read.
+    #
+    # The group's own monitor_paths are never rewritten -- the temps live here
+    # and are passed to run_one() per run, so a group keeps describing what
+    # the user actually uploaded.
+    aligned_cache <- reactiveVal(list())
+
+    dam_path_key <- function(monitor_paths) {
+      paste(vapply(monitor_paths[dam_roles], function(p) {
+        if (length(p) == 1L && !is.na(p)) as.character(p) else ""
+      }, character(1)), collapse = "\r")
+    }
+
+    dam_cache_drop <- function(gid) {
+      cur <- aligned_cache()
+      if (!is.null(cur[[gid]])) { cur[[gid]] <- NULL; aligned_cache(cur) }
+      invisible()
+    }
+
+    dam_cache_put <- function(gid, monitor_paths, paths) {
+      cur <- aligned_cache()
+      cur[[gid]] <- list(key = dam_path_key(monitor_paths), paths = paths)
+      aligned_cache(cur)
+    }
+
+    # Returns the cached temp paths, or NULL after dropping a stale entry.
+    # Two ways an entry goes stale:
+    #   - the originals changed, so the plan was computed against other files
+    #     (not reachable from the UI today, which makes a new group per upload;
+    #      cheap to check, and silently reusing a foreign plan would be ugly);
+    #   - a temp file is gone. tempdir() is not guaranteed to survive a long
+    #     session, and handing the worker a path that no longer exists would
+    #     turn a stale cache into a run failure.
+    # Either way the caller falls back to re-planning, which is always correct
+    # -- just slower, and it re-asks.
+    dam_cache_get <- function(gid, monitor_paths) {
+      ent <- aligned_cache()[[gid]]
+      if (is.null(ent)) return(NULL)
+      if (!identical(ent$key, dam_path_key(monitor_paths))) {
+        dam_cache_drop(gid); return(NULL)
+      }
+      if (!all(nzchar(ent$paths)) || !all(file.exists(ent$paths))) {
+        dam_cache_drop(gid); return(NULL)
+      }
+      ent$paths
+    }
+
+    request_run <- function(gids) {
+      plans <- list(); need <- character(0)
+      for (gid in gids) {
+        g  <- rv$groups[[gid]]
+        if (!all(dam_paths_usable(g$monitor_paths))) {
+          run_one(gid); next                      # let the engine report missing files
+        }
+        cached <- dam_cache_get(gid, g$monitor_paths)
+        if (!is.null(cached)) {
+          run_one(gid, aligned = cached); next    # already confirmed: don't re-ask
+        }
+        mf <- vapply(g$monitor_paths[dam_roles], as.character, character(1))
+        plan <- tryCatch(dam_plan_alignment(mf), error = function(e) NULL)
+        if (is.null(plan)) { run_one(gid); next }  # unreadable -> let the engine report
+        if (isTRUE(plan$needs_alignment)) {
+          plans[[gid]] <- plan; need <- c(need, gid)
+        } else {
+          run_one(gid)                             # already aligned: run straight away
+        }
+      }
+      if (length(need)) {
+        pending_gids(need); pending_plans(plans)
+        showModal(dam_align_modal(need, plans))
+      }
+    }
+
+    dam_align_modal <- function(need, plans) {
+      blocks <- lapply(need, function(gid) {
+        p <- plans[[gid]]
+        tags$div(
+          style = "margin-bottom:14px;",
+          tags$b(sprintf("Group: %s", rv$groups[[gid]]$label)),
+          tags$pre(
+            style = paste("white-space:pre-wrap; font-size:12px; background:#f6f8fa;",
+                          "padding:8px; border-radius:4px;"),
+            paste(p$report, collapse = "\n"))
+        )
+      })
+      modalDialog(
+        title = "Monitor files need alignment before combining",
+        tags$p(paste(
+          "These monitors do not currently line up, so the combiner would",
+          "otherwise stop with a row-count error. Review the planned fix, then",
+          "choose whether to align and run. Your original files are NOT",
+          "modified -- alignment writes new temporary files used only for this run.")),
+        blocks,
+        footer = tagList(
+          modalButton("Cancel"),
+          actionButton(session$ns("dam_confirm_align"), "Align & run",
+                       class = "btn-success", icon = icon("check"))
+        ),
+        size = "l", easyClose = FALSE
+      )
+    }
+
+    observeEvent(input$dam_confirm_align, {
+      need  <- pending_gids(); plans <- pending_plans()
+      removeModal()
+      for (gid in need) {
+        if (is.null(rv$groups[[gid]])) next        # removed while dialog open
+        plan  <- plans[[gid]]
+        paths <- tryCatch(dam_write_aligned(plan), error = function(e) NULL)
+        if (is.null(paths)) {
+          showNotification(sprintf("Alignment failed for '%s'.",
+                                   rv$groups[[gid]]$label),
+                           type = "error", duration = NULL)
+          next
+        }
+        g <- rv$groups[[gid]]
+        # Deliberately NOT written back into g$monitor_paths: the group keeps
+        # describing the user's uploads, and the temp paths travel with the
+        # run instead (see dam_lean_group()). Cached so a re-run of this group
+        # does not raise the dialog again.
+        aligned <- c(plug   = unname(paths["plug"]),
+                     middle = unname(paths["middle"]),
+                     food   = unname(paths["food"]))
+        dam_cache_put(gid, g$monitor_paths, aligned)
+        append_log(rv, c(sprintf("\n----- Aligned '%s' before run -----", g$label),
+                         plan$report))
+        showNotification(sprintf("Aligned '%s'; running.", g$label), type = "message")
+        run_one(gid, aligned = aligned)
+      }
+      pending_gids(character(0)); pending_plans(list())
+    })
 
     # -- Collect finished runs ---------------------------------------
     observeEvent(run_task$status(), {
@@ -295,7 +567,7 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         showNotification("Select a group in the table first.", type = "warning")
         return()
       }
-      run_one(gid)
+      request_run(gid)
     })
 
     observeEvent(input$run_all, {
@@ -305,7 +577,7 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         showNotification("No pending groups to run.", type = "message")
         return()
       }
-      for (gid in pending) run_one(gid)
+      request_run(pending)
     })
 
     observeEvent(input$clear_log, { rv$log <- character(0) })

@@ -192,6 +192,98 @@ read_position_monitors <- function(
 
 
 # ============================================================
+# DATETIME RANGE DETECTION (for the app's period selector)
+#
+# read_monitor_datetimes()  — parse just the datetime column of one
+#                             monitor file (Case A / Case B autodetect).
+# detect_datetime_range()   — common (overlapping) recording window across
+#                             the plug/middle/food files, as POSIXct.
+#
+# Timestamps are parsed as naive wall-clock (tz = "UTC" by default) so the
+# date/time the user sees matches the file exactly, with no timezone shift.
+# The Case A/B detection mirrors read_one_monitor() above; keep them in sync.
+#
+# The read goes through .dam_read_raw() (R/00_dam_align.R) rather than a bare
+# fread(): fread() stops at the first blank line, so a single dropped reading
+# mid-file silently truncated the offered range to everything before it.
+# ============================================================
+
+read_monitor_datetimes <- function(path, tz = "UTC") {
+  dt <- .dam_read_raw(path)$data
+
+  if (!nrow(dt) || ncol(dt) < 3) {
+    stop(sprintf("Cannot detect datetime format in '%s'. Check columns 2-6.",
+                 basename(path)))
+  }
+
+  if (grepl("\\d{2}:\\d{2}:\\d{2}", dt[[3]][1])) {
+    datetime_str <- paste(dt[[2]], dt[[3]])
+    datetime_str <- gsub("(\\d{1,2} [A-Za-z]{3} )(\\d{2})( )",
+                         "\\120\\2\\3", datetime_str)
+    parsed <- dmy_hms(datetime_str, tz = tz)
+
+  } else if (ncol(dt) >= 5 && grepl("\\d{2}:\\d{2}:\\d{2}", dt[[5]][1])) {
+    year_str <- ifelse(nchar(as.character(dt[[4]])) == 2,
+                       paste0("20", dt[[4]]),
+                       as.character(dt[[4]]))
+    datetime_str <- paste(dt[[2]], dt[[3]], year_str, dt[[5]])
+    parsed <- dmy_hms(datetime_str, tz = tz)
+
+  } else {
+    stop(sprintf("Cannot detect datetime format in '%s'. Check columns 2-6.",
+                 basename(path)))
+  }
+
+  parsed <- floor_date(parsed, "minute")
+  parsed[!is.na(parsed)]
+}
+
+# Returns FOUR fields, two of which are a trap if you pick the wrong pair:
+#
+#   min / max            the INTERSECTED window -- the span every monitor
+#                        covers. This is the UI-facing pair, and the only
+#                        one anything in R/ reads. It matches what survives
+#                        dam_plan_alignment(), which trims all monitors to
+#                        the earliest-ending one, so offering it never lets
+#                        the user select data alignment is about to discard.
+#
+#   earliest / latest    the widest RAW extent across files. Read NOWHERE in
+#                        R/ -- retained for diagnostics only. On a staggered
+#                        set this runs past the aligned window, so wiring it
+#                        into the period selector would reintroduce exactly
+#                        the bug the selector tests guard against.
+#
+# The two pairs are equal whenever the monitors share a start and an end,
+# which is true of every file set in this repo -- so a mix-up will not show
+# up in casual testing. test-group-manager-server.R pins the rendered UI to
+# min/max against a synthetic staggered fixture; keep that test honest.
+detect_datetime_range <- function(monitor_files, tz = "UTC") {
+  if (length(monitor_files) == 0) stop("No monitor files provided.")
+
+  ranges <- lapply(monitor_files, function(p) {
+    dts <- read_monitor_datetimes(p, tz)
+    if (!length(dts)) stop(sprintf("No parseable timestamps in '%s'.",
+                                   basename(p)))
+    c(min(dts), max(dts))
+  })
+
+  starts <- do.call(c, lapply(ranges, `[`, 1))
+  ends   <- do.call(c, lapply(ranges, `[`, 2))
+
+  # Overlapping window shared by all files (what can actually be analyzed).
+  common_min <- max(starts)
+  common_max <- min(ends)
+  if (common_min >= common_max) {
+    stop("The monitor files do not share an overlapping time window.")
+  }
+
+  list(min = common_min, max = common_max,
+       # widest bounds across files, for display
+       earliest = min(starts), latest = max(ends))
+}
+
+
+# ============================================================
 # STEP 2: DETECT DEAD CHANNELS FROM SUMMED SIGNAL
 # ============================================================
 

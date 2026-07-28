@@ -35,6 +35,76 @@ test_that("add_time_metadata assigns light/dark and experiment day", {
   expect_equal(out$experiment_day, c(1L, 1L, 1L, 2L))
 })
 
+test_that("detect_datetime_range finds the overlapping window across files", {
+  skip_if_not(all(file.exists(unlist(sample_paths))), "sample data missing")
+  r <- detect_datetime_range(unlist(sample_paths), tz = "UTC")
+  expect_s3_class(r$min, "POSIXct")
+  expect_true(r$min < r$max)
+  # detected values match the file wall-clock (parsed as UTC, no shift)
+  expect_equal(format(r$min, "%Y-%m-%d %H:%M", tz = "UTC"), "2026-01-28 15:07")
+  expect_true(r$earliest <= r$min && r$latest >= r$max)
+})
+
+test_that("detect_datetime_range errors when files don't overlap", {
+  d1 <- tempfile(fileext = ".txt"); d2 <- tempfile(fileext = ".txt")
+  # Case-A rows: idx, "DD Mon YY", "HH:MM:SS", then activity cols.
+  mk <- function(path, day) {
+    rows <- sprintf("%d\t%d Jan 26\t%02d:00:00\t0\tCt\t%s",
+                    1:3, day, 0:2, paste(rep(0, 32), collapse = "\t"))
+    writeLines(rows, path)
+  }
+  mk(d1, 1); mk(d2, 20)   # day 1 vs day 20 — no overlap
+  expect_error(detect_datetime_range(c(d1, d2), tz = "UTC"), "overlap")
+})
+
+test_that("read_monitor_datetimes reads past a blank line (dropped reading)", {
+  # A bare fread() stops at the first blank line. On real data a single dropped
+  # reading mid-file truncated the period selector to everything before it.
+  p <- tempfile(fileext = ".txt")
+  row <- function(i, hh, mm) sprintf("%d\t1 Jan 26\t%02d:%02d:00\t0\tCt\t%s",
+                                     i, hh, mm, paste(rep(0, 32), collapse = "\t"))
+  writeLines(c(row(1, 0, 0), row(2, 0, 1), "",
+               row(3, 0, 2), row(4, 0, 3)), p)
+
+  dts <- read_monitor_datetimes(p, tz = "UTC")
+  expect_length(dts, 4)
+  expect_equal(format(max(dts), "%H:%M", tz = "UTC"), "00:03")
+})
+
+test_that("detect_datetime_range spans rows after a blank line", {
+  p1 <- tempfile(fileext = ".txt"); p2 <- tempfile(fileext = ".txt")
+  row <- function(i, hh, mm) sprintf("%d\t1 Jan 26\t%02d:%02d:00\t0\tCt\t%s",
+                                     i, hh, mm, paste(rep(0, 32), collapse = "\t"))
+  body <- c(row(1, 0, 0), row(2, 0, 1), "", row(3, 0, 2), row(4, 0, 3))
+  writeLines(body, p1); writeLines(body, p2)
+
+  r <- detect_datetime_range(c(p1, p2), tz = "UTC")
+  expect_equal(format(r$max, "%H:%M", tz = "UTC"), "00:03")  # not "00:01"
+  expect_equal(format(r$latest, "%H:%M", tz = "UTC"), "00:03")
+})
+
+test_that("on a staggered end, min/max is the post-alignment window", {
+  # The offered period must be what survives alignment, not the widest raw
+  # extent: alignment trims every monitor to the earliest-ending one, so a
+  # range reaching past that would let the user select data about to be
+  # discarded. min/max are the intersected pair; earliest/latest are the
+  # widest pair and must stay distinct from it here.
+  p <- make_staggered_monitors(n_long = 200L, n_short = 140L)
+
+  r <- detect_datetime_range(unname(p), tz = "UTC")
+  expect_equal(format(r$max,    "%H:%M", tz = "UTC"), "18:55")  # common end
+  expect_equal(format(r$latest, "%H:%M", tz = "UTC"), "19:55")  # widest end
+  expect_true(r$max < r$latest)                                 # genuinely staggered
+
+  # Pin it to alignment itself rather than to a literal: whatever
+  # dam_plan_alignment() produces is what the selector must offer.
+  plan <- dam_plan_alignment(as.list(p))
+  aligned <- plan$aligned[["plug"]]
+  n <- nrow(aligned)
+  expect_equal(r$min, .dam_parse_ts(aligned$V2[1], aligned$V3[1]))
+  expect_equal(r$max, .dam_parse_ts(aligned$V2[n], aligned$V3[n]))
+})
+
 test_that("parse_channels handles ranges, lists and clamping", {
   skip_if_not(exists("parse_channels"), "shiny not available")
   expect_equal(parse_channels("1:32"), 1:32)
