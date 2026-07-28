@@ -40,6 +40,40 @@ test_that("uploading files detects the period and builds the run config", {
   })
 })
 
+test_that("the period selector UI offers the post-alignment window", {
+  # detect_datetime_range() returns both an intersected pair (min/max) and a
+  # widest pair (earliest/latest). The UI must render the intersected one --
+  # the window that will still exist after alignment trims to the common end.
+  # This asserts on the rendered HTML rather than on detected_range(), so
+  # switching the renderUI to rng$earliest/rng$latest fails here instead of
+  # silently offering hours that alignment is about to discard.
+  skip_if_not(exists("mod_group_manager_server"), "shiny not available")
+
+  p <- make_staggered_monitors(n_long = 200L, n_short = 140L)
+  fileval <- function(x) data.frame(name = basename(x), size = 1L,
+                                    type = "text/plain", datapath = x,
+                                    stringsAsFactors = FALSE)
+
+  rv <- init_state()
+  shiny::testServer(mod_group_manager_server, args = list(rv = rv), {
+    session$setInputs(plug   = fileval(p[["plug"]]),
+                      middle = fileval(p[["middle"]]),
+                      food   = fileval(p[["food"]]))
+
+    html <- output$period_ui$html
+    expect_true(grepl("18:55", html, fixed = TRUE))   # common end -- offered
+    expect_false(grepl("19:55", html, fixed = TRUE))  # widest end -- must not be
+    expect_true(grepl("16:36", html, fixed = TRUE))   # common start
+
+    # "Reset to full range" must reset to the same window, not the widest.
+    session$setInputs(start_date  = as.Date("2026-06-03"), start_time  = "17:30",
+                      finish_date = as.Date("2026-06-03"), finish_time = "18:00")
+    session$setInputs(reset_period = 1)
+    rng <- detected_range()
+    expect_equal(format(rng$max, "%H:%M", tz = "UTC"), "18:55")
+  })
+})
+
 test_that("build_datetime tolerates blank and second-precision times", {
   skip_if_not(exists("mod_group_manager_server"), "shiny not available")
   rv <- init_state()

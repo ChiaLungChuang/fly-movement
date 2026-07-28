@@ -83,6 +83,28 @@ test_that("detect_datetime_range spans rows after a blank line", {
   expect_equal(format(r$latest, "%H:%M", tz = "UTC"), "00:03")
 })
 
+test_that("on a staggered end, min/max is the post-alignment window", {
+  # The offered period must be what survives alignment, not the widest raw
+  # extent: alignment trims every monitor to the earliest-ending one, so a
+  # range reaching past that would let the user select data about to be
+  # discarded. min/max are the intersected pair; earliest/latest are the
+  # widest pair and must stay distinct from it here.
+  p <- make_staggered_monitors(n_long = 200L, n_short = 140L)
+
+  r <- detect_datetime_range(unname(p), tz = "UTC")
+  expect_equal(format(r$max,    "%H:%M", tz = "UTC"), "18:55")  # common end
+  expect_equal(format(r$latest, "%H:%M", tz = "UTC"), "19:55")  # widest end
+  expect_true(r$max < r$latest)                                 # genuinely staggered
+
+  # Pin it to alignment itself rather than to a literal: whatever
+  # dam_plan_alignment() produces is what the selector must offer.
+  plan <- dam_plan_alignment(as.list(p))
+  aligned <- plan$aligned[["plug"]]
+  n <- nrow(aligned)
+  expect_equal(r$min, .dam_parse_ts(aligned$V2[1], aligned$V3[1]))
+  expect_equal(r$max, .dam_parse_ts(aligned$V2[n], aligned$V3[n]))
+})
+
 test_that("parse_channels handles ranges, lists and clamping", {
   skip_if_not(exists("parse_channels"), "shiny not available")
   expect_equal(parse_channels("1:32"), 1:32)

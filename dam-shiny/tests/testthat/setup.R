@@ -48,3 +48,27 @@ sample_paths <- list(
   middle = file.path(app_root, "inst", "extdata", "Monitor8.txt"),
   food   = file.path(app_root, "inst", "extdata", "Monitor9.txt")
 )
+
+# Synthetic staggered-end monitor set: three Case-A files starting together,
+# the middle one genuinely stopping an hour early. Alignment trims all three
+# to the common end, so the offered period must be the trimmed window, not the
+# longest file's extent. The bundled samples can't cover this — they share a
+# start and an end, so intersected and widest ranges coincide there.
+# Day is fixed ("3 Jun 26") and the span stays inside it, so no locale-
+# dependent month formatting is needed.
+make_staggered_monitors <- function(n_long = 200L, n_short = 140L) {
+  t0 <- as.POSIXct("2026-06-03 16:36:00", tz = "UTC")
+  mk <- function(path, n) {
+    ts <- t0 + (0:(n - 1)) * 60
+    writeLines(sprintf("%d\t3 Jun 26\t%s\t1\t0\t7\t0\tCt\t0\t0\t%s",
+                       seq_len(n),
+                       format(ts, "%H:%M:%S", tz = "UTC"),
+                       paste(rep(0, 32), collapse = "\t")),
+               path)
+  }
+  p <- c(plug = tempfile(fileext = ".txt"),
+         middle = tempfile(fileext = ".txt"),
+         food = tempfile(fileext = ".txt"))
+  mk(p[["plug"]], n_long); mk(p[["middle"]], n_short); mk(p[["food"]], n_long)
+  p
+}
