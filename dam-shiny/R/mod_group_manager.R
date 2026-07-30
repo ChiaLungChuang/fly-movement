@@ -259,19 +259,51 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
             c("#eceff1", "#e2e3f3", "#fff3cd", "#d4edda", "#f8d7da")))
     })
 
-    selected_gid <- reactive({
+    # -- Selection identity ------------------------------------------
+    # The table reports a ROW INDEX. That index is only meaningful against the
+    # list as it was rendered, so it is resolved to a gid the moment the
+    # selection arrives and never stored. Keeping the index instead would
+    # desync the first time the list changed under it: with [A, B, C], select
+    # B (index 2) and remove it, and index 2 addresses C -- in range, no error,
+    # and every "selected" action silently targets a group the user never
+    # chose. Removing the LAST group is the same fault with the index out of
+    # range, which threw inside a reactive and took the session down with it.
+    selected_id <- reactiveVal(NULL)   # a gid, never an index
+
+    observeEvent(input$group_tbl_rows_selected, ignoreNULL = FALSE, {
       sel <- input$group_tbl_rows_selected
-      if (is.null(sel) || !length(rv$groups)) return(NULL)
-      names(rv$groups)[[sel]]
+      ids <- names(rv$groups)
+      selected_id(
+        if (length(sel) == 1L && !is.na(sel) && sel >= 1L && sel <= length(ids))
+          ids[[sel]] else NULL
+      )
     })
 
-    # Keep the app-wide "focused group" in sync for the per-group tabs.
-    observeEvent(selected_gid(), {
-      if (!is.null(selected_gid())) rv$selected <- selected_gid()
+    # Total by construction: returns NULL rather than throwing, for a selection
+    # that is absent, stale, or points at a group that has since been removed.
+    selected_gid <- reactive({
+      id <- selected_id()
+      if (is.null(id) || is.null(rv$groups[[id]])) NULL else id
+    })
+
+    # Keep the app-wide "focused group" in sync for the per-group tabs. A NULL
+    # selection is not propagated: remove_group() owns the fallback when the
+    # focused group disappears.
+    observeEvent(selected_gid(), ignoreNULL = FALSE, {
+      gid <- selected_gid()
+      if (!is.null(gid)) rv$selected <- gid
     })
 
     observeEvent(input$remove, {
       gid <- selected_gid(); req(gid)
+
+      # Drop the selection before the list changes, and push the cleared
+      # selection to the client explicitly rather than trusting it to redraw.
+      # The race this closes: the client still believes row N is selected while
+      # selected_gid() re-executes on the flush against a shorter list.
+      selected_id(NULL)
+      DT::selectRows(DT::dataTableProxy("group_tbl", session = session), NULL)
+
       dam_cache_drop(gid)          # don't strand the group's aligned temps
       remove_group(rv, gid)
     })
