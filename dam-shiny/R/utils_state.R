@@ -33,6 +33,9 @@ new_group <- function(group_id,
     label         = label,
     color         = color,
     monitor_paths = list(plug = NULL, middle = NULL, food = NULL),
+    # Original upload names by role. Shiny's fileInput datapaths are generated
+    # ("0.txt"), so these are the only record of which file is which.
+    monitor_names = list(plug = NULL, middle = NULL, food = NULL),
     config = list(
       channels              = 1:32,
       start_datetime        = NULL,   # detected from files (app) or set by caller
@@ -128,7 +131,8 @@ run_group_pipeline <- function(g, progress = NULL, log = NULL) {
   step(0.05, "Reading monitor files")
   monitors <- capture_engine(
     read_position_monitors(mf, cfg$channels,
-                           cfg$start_datetime, cfg$end_datetime, cfg$tz))
+                           cfg$start_datetime, cfg$end_datetime, cfg$tz,
+                           source_names = g$monitor_names))
 
   step(0.20, "Detecting dead channels")
   dead_summary <- capture_engine(

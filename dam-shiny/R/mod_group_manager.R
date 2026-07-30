@@ -183,10 +183,14 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
       )
     }
 
-    add_configured_group <- function(label, color, paths, period = NULL) {
+    add_configured_group <- function(label, color, paths, period = NULL,
+                                     names = NULL) {
       gid <- add_group(rv, label = label, color = color)
       g <- rv$groups[[gid]]
       g$monitor_paths <- paths
+      # Uploads arrive as generated datapaths; keep the names the user chose.
+      g$monitor_names <- if (is.null(names))
+        lapply(paths, function(p) if (is.null(p)) NULL else basename(p)) else names
       cfg <- form_config()
       if (!is.null(period)) {
         cfg$start_datetime <- period$start
@@ -206,7 +210,10 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         input$label, input$color,
         list(plug   = input$plug$datapath,
              middle = input$middle$datapath,
-             food   = input$food$datapath)
+             food   = input$food$datapath),
+        names = list(plug   = input$plug$name,
+                     middle = input$middle$name,
+                     food   = input$food$name)
       )
       showNotification(sprintf("Added group '%s'", input$label), type = "message")
     })
@@ -364,7 +371,8 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     # uploads. Split out from run_one() so the substitution can be asserted
     # directly; run_task$invoke() cannot be intercepted from a test.
     dam_lean_group <- function(g, aligned = NULL) {
-      lean <- g[c("id", "label", "color", "monitor_paths", "config")]
+      lean <- g[c("id", "label", "color", "monitor_paths", "monitor_names",
+                  "config")]
       if (!is.null(aligned)) {
         lean$monitor_paths <- as.list(aligned[dam_roles])
       }
