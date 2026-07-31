@@ -33,6 +33,9 @@ new_group <- function(group_id,
     label         = label,
     color         = color,
     monitor_paths = list(plug = NULL, middle = NULL, food = NULL),
+    # Original upload names by role. Shiny's fileInput datapaths are generated
+    # ("0.txt"), so these are the only record of which file is which.
+    monitor_names = list(plug = NULL, middle = NULL, food = NULL),
     config = list(
       channels              = 1:32,
       start_datetime        = NULL,   # detected from files (app) or set by caller
@@ -128,12 +131,30 @@ run_group_pipeline <- function(g, progress = NULL, log = NULL) {
   step(0.05, "Reading monitor files")
   monitors <- capture_engine(
     read_position_monitors(mf, cfg$channels,
-                           cfg$start_datetime, cfg$end_datetime, cfg$tz))
+                           cfg$start_datetime, cfg$end_datetime, cfg$tz,
+                           source_names = g$monitor_names))
 
   step(0.20, "Detecting dead channels")
   dead_summary <- capture_engine(
     detect_dead_channels(monitors, cfg$death_threshold_hours))
   monitors <- capture_engine(remove_dead_channels(monitors, dead_summary))
+
+  # Stop at the step that knows what happened. assign_position_zones() derives
+  # its channel list from the ch* columns of monitors$plug; with none left it
+  # reshapes an empty table and data.table reports
+  #   some columns are not in the data.table: [channel, datetime]
+  # two steps downstream, naming neither the channels, the threshold, nor the
+  # removal that emptied it. Checked against the same columns the consumer
+  # reads, so the guard cannot disagree with what actually breaks.
+  if (!length(grep("^ch\\d+$", names(monitors$plug), value = TRUE))) {
+    n_dead  <- sum(dead_summary$status == "DEAD")
+    n_total <- nrow(dead_summary)
+    stop(sprintf(
+      paste("all %d of %d channel(s) classified dead at threshold %.1f h;",
+            "nothing left to analyse. Raise the death threshold, or check",
+            "whether the recording really is flat."),
+      n_dead, n_total, cfg$death_threshold_hours))
+  }
 
   step(0.35, "Assigning position zones (state machine)")
   result <- capture_engine(assign_position_zones(monitors))

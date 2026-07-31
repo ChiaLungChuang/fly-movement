@@ -183,10 +183,14 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
       )
     }
 
-    add_configured_group <- function(label, color, paths, period = NULL) {
+    add_configured_group <- function(label, color, paths, period = NULL,
+                                     names = NULL) {
       gid <- add_group(rv, label = label, color = color)
       g <- rv$groups[[gid]]
       g$monitor_paths <- paths
+      # Uploads arrive as generated datapaths; keep the names the user chose.
+      g$monitor_names <- if (is.null(names))
+        lapply(paths, function(p) if (is.null(p)) NULL else basename(p)) else names
       cfg <- form_config()
       if (!is.null(period)) {
         cfg$start_datetime <- period$start
@@ -206,7 +210,10 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
         input$label, input$color,
         list(plug   = input$plug$datapath,
              middle = input$middle$datapath,
-             food   = input$food$datapath)
+             food   = input$food$datapath),
+        names = list(plug   = input$plug$name,
+                     middle = input$middle$name,
+                     food   = input$food$name)
       )
       showNotification(sprintf("Added group '%s'", input$label), type = "message")
     })
@@ -259,19 +266,51 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
             c("#eceff1", "#e2e3f3", "#fff3cd", "#d4edda", "#f8d7da")))
     })
 
-    selected_gid <- reactive({
+    # -- Selection identity ------------------------------------------
+    # The table reports a ROW INDEX. That index is only meaningful against the
+    # list as it was rendered, so it is resolved to a gid the moment the
+    # selection arrives and never stored. Keeping the index instead would
+    # desync the first time the list changed under it: with [A, B, C], select
+    # B (index 2) and remove it, and index 2 addresses C -- in range, no error,
+    # and every "selected" action silently targets a group the user never
+    # chose. Removing the LAST group is the same fault with the index out of
+    # range, which threw inside a reactive and took the session down with it.
+    selected_id <- reactiveVal(NULL)   # a gid, never an index
+
+    observeEvent(input$group_tbl_rows_selected, ignoreNULL = FALSE, {
       sel <- input$group_tbl_rows_selected
-      if (is.null(sel) || !length(rv$groups)) return(NULL)
-      names(rv$groups)[[sel]]
+      ids <- names(rv$groups)
+      selected_id(
+        if (length(sel) == 1L && !is.na(sel) && sel >= 1L && sel <= length(ids))
+          ids[[sel]] else NULL
+      )
     })
 
-    # Keep the app-wide "focused group" in sync for the per-group tabs.
-    observeEvent(selected_gid(), {
-      if (!is.null(selected_gid())) rv$selected <- selected_gid()
+    # Total by construction: returns NULL rather than throwing, for a selection
+    # that is absent, stale, or points at a group that has since been removed.
+    selected_gid <- reactive({
+      id <- selected_id()
+      if (is.null(id) || is.null(rv$groups[[id]])) NULL else id
+    })
+
+    # Keep the app-wide "focused group" in sync for the per-group tabs. A NULL
+    # selection is not propagated: remove_group() owns the fallback when the
+    # focused group disappears.
+    observeEvent(selected_gid(), ignoreNULL = FALSE, {
+      gid <- selected_gid()
+      if (!is.null(gid)) rv$selected <- gid
     })
 
     observeEvent(input$remove, {
       gid <- selected_gid(); req(gid)
+
+      # Drop the selection before the list changes, and push the cleared
+      # selection to the client explicitly rather than trusting it to redraw.
+      # The race this closes: the client still believes row N is selected while
+      # selected_gid() re-executes on the flush against a shorter list.
+      selected_id(NULL)
+      DT::selectRows(DT::dataTableProxy("group_tbl", session = session), NULL)
+
       dam_cache_drop(gid)          # don't strand the group's aligned temps
       remove_group(rv, gid)
     })
@@ -332,7 +371,8 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     # uploads. Split out from run_one() so the substitution can be asserted
     # directly; run_task$invoke() cannot be intercepted from a test.
     dam_lean_group <- function(g, aligned = NULL) {
-      lean <- g[c("id", "label", "color", "monitor_paths", "config")]
+      lean <- g[c("id", "label", "color", "monitor_paths", "monitor_names",
+                  "config")]
       if (!is.null(aligned)) {
         lean$monitor_paths <- as.list(aligned[dam_roles])
       }

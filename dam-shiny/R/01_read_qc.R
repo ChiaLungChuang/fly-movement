@@ -28,7 +28,13 @@ read_position_monitors <- function(
     channels       = 1:32,
     start_datetime = NULL,
     end_datetime   = NULL,
-    tz             = "America/Chicago"
+    tz             = "America/Chicago",
+    # Optional display names by role, e.g. c(plug = "Monitor7.txt", ...).
+    # Shiny's fileInput stores uploads under generated datapaths ("0.txt",
+    # "1.txt"), so basename(path) logs all three monitors identically and the
+    # log cannot even confirm three distinct files were read. Pass the original
+    # upload names to keep the log meaningful. Falls back to basename(path).
+    source_names   = NULL
 ) {
 
   required_roles <- c("plug", "middle", "food")
@@ -47,9 +53,22 @@ read_position_monitors <- function(
     stop("channels must be integers between 1 and 32")
   }
 
+  # Display name for a role: the original upload name when known, otherwise
+  # the file's own basename. When the two differ the actual file is shown too,
+  # so an aligned temp copy is never mistaken for the upload itself.
+  display_name <- function(path, role) {
+    src <- if (!is.null(source_names) && role %in% names(source_names))
+             source_names[[role]] else NULL
+    if (is.null(src) || !length(src) || is.na(src) || !nzchar(src)) {
+      return(basename(path))
+    }
+    if (identical(basename(path), as.character(src))) as.character(src)
+    else sprintf("%s (read from %s)", src, basename(path))
+  }
+
   # -- Internal: parse one monitor file --------------------------
   read_one_monitor <- function(path, role) {
-    cat(sprintf("  Reading [%s]: %s\n", role, basename(path)))
+    cat(sprintf("  Reading [%s]: %s\n", role, display_name(path, role)))
 
     dt <- fread(path, header = FALSE)
 
