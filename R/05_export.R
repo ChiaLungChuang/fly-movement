@@ -3,15 +3,43 @@
 #
 # Provides:
 #   export_results_excel()  — sleep-position results workbook
+#   export_provenance_df()  — Parameter/Value record of how a run was made
 #
-# Sheets: Per_fly, Group_summary, Dead_channels, UNKNOWN_diag,
+# Sheets: Provenance, Per_fly, Group_summary, Dead_channels, UNKNOWN_diag,
 #         Transit_summary, Anchor_summary, Transit_inconsistent,
 #         Anchor_ambiguous
 #
-# Uses the anchor-method columns (sleep_zone_anchored etc.).
+# Zone method: both methods are computed for every run; use_anchored selects
+# which columns this workbook reports. It defaults to TRUE, which is what the
+# workbook did unconditionally before the parameter existed -- so any file
+# without a Provenance sheet is anchor-method by construction.
+#
+# The Provenance sheet is always written. A workbook gets emailed and opened
+# months later, separated from whatever explained it, so the method it used
+# has to travel inside the file rather than alongside it.
 #
 # Requires (loaded by the run script): data.table, openxlsx
 # ============================================================
+
+# Parameter/Value provenance record. Mirrors activity_settings_df()'s shape so
+# the workbook family shares one convention. `extra` appends caller-supplied
+# rows (source files, alignment status, thresholds) without this function
+# needing to know about them.
+export_provenance_df <- function(group_label, use_anchored = TRUE,
+                                 extra = NULL) {
+  df <- data.frame(
+    Parameter = c("Group label", "Zone method", "Zone columns reported"),
+    Value = c(
+      group_label,
+      if (isTRUE(use_anchored)) "anchor" else "state machine",
+      if (isTRUE(use_anchored)) "sleep_zone_anchored / zone_anchored"
+      else "sleep_zone / zone"
+    ),
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(extra) && nrow(extra)) df <- rbind(df, extra)
+  df
+}
 
 export_results_excel <- function(
     dat,
@@ -19,17 +47,28 @@ export_results_excel <- function(
     unknown_diag,
     anchors,           # data.table returned by assign_position_anchored()
     group_label  = "All flies",
-    output_file  = "sleep_zone_results.xlsx"
+    output_file  = "sleep_zone_results.xlsx",
+    # TRUE reproduces the behaviour from before this parameter existed.
+    use_anchored = TRUE,
+    # Extra Parameter/Value rows for the Provenance sheet.
+    provenance   = NULL
 ) {
 
   cat(sprintf("=== Exporting Excel: %s ===\n", basename(output_file)))
+  cat(sprintf("  Zone method: %s\n",
+              if (isTRUE(use_anchored)) "anchor" else "state machine"))
+
+  # Column set for the selected method. Mirrors .zone_cols() in 04_plots.R.
+  col_sleep_zone <- if (isTRUE(use_anchored)) "sleep_zone_anchored" else "sleep_zone"
+  col_zone       <- if (isTRUE(use_anchored)) "zone_anchored"       else "zone"
+  col_bout_start <- if (isTRUE(use_anchored)) "bout_start_anchored" else "bout_start"
 
   channels_to_export <- sort(unique(dat$channel))
-  sleep_dat <- dat[bout_start_anchored == TRUE & channel %in% channels_to_export]
+  sleep_dat <- dat[get(col_bout_start) == TRUE & channel %in% channels_to_export]
 
   # -- Sheet 1: Per_fly -----------------------------------------
-  per_fly <- sleep_dat[, .N, by = .(channel, sleep_zone_anchored)]
-  setnames(per_fly, "sleep_zone_anchored", "sleep_zone")
+  per_fly <- sleep_dat[, .N, by = c("channel", col_sleep_zone)]
+  setnames(per_fly, col_sleep_zone, "sleep_zone")
   per_fly[, total      := sum(N), by = channel]
   per_fly[, proportion := round(N / total, 4)]
 
@@ -51,8 +90,8 @@ export_results_excel <- function(
   # -- Sheet 2: Group_summary -----------------------------------
   all_combos2 <- CJ(channel    = channels_to_export,
                     sleep_zone = c("Z1","Z2","Z3","Z4"))
-  per_fly2 <- sleep_dat[, .N, by = .(channel, sleep_zone_anchored)]
-  setnames(per_fly2, "sleep_zone_anchored", "sleep_zone")
+  per_fly2 <- sleep_dat[, .N, by = c("channel", col_sleep_zone)]
+  setnames(per_fly2, col_sleep_zone, "sleep_zone")
   per_fly2 <- merge(all_combos2, per_fly2,
                     by = c("channel","sleep_zone"), all.x = TRUE)
   per_fly2[is.na(N), N := 0]
@@ -121,10 +160,10 @@ export_results_excel <- function(
 
   # -- Sheet 7: Transit_inconsistent (row-level detail) ---------
   transit_incon <- dat[transit_type == "TRANSIT_INCONSISTENT",
-                       .(datetime, channel,
-                         B_plug, B_middle, B_food,
-                         zone_anchored, transit_type,
-                         anchor_type, anchor_zone)]
+                       c("datetime", "channel",
+                         "B_plug", "B_middle", "B_food",
+                         col_zone, "transit_type",
+                         "anchor_type", "anchor_zone"), with = FALSE]
   transit_incon[, datetime := as.character(datetime)]
   setorder(transit_incon, channel, datetime)
 
@@ -149,6 +188,10 @@ export_results_excel <- function(
 
   # -- Write workbook -------------------------------------------
   wb <- createWorkbook()
+
+  addWorksheet(wb, "Provenance")
+  writeData(wb, "Provenance",
+            export_provenance_df(group_label, use_anchored, provenance))
 
   addWorksheet(wb, "Per_fly")
   writeData(wb, "Per_fly", per_fly_export)

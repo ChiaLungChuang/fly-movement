@@ -68,10 +68,14 @@ mod_downloads_server <- function(id, rv) {
                 group_label = g$label, output_file = NULL), width = 4, height = 6)
 
             # -- Results workbook --------------------------------
+            # use_anchored passed EXPLICITLY. Its TRUE default exists for
+            # run_position.R's benefit; relying on it here would silently
+            # restore the anchor-only workbook this commit fixes.
             export_results_excel(
               dat = g$dat, dead_summary = g$dead_summary,
               unknown_diag = g$unknown_diag, anchors = g$anchors,
               group_label = g$label,
+              use_anchored = ua,
               output_file = file.path(gdir, paste0(slug, "_results.xlsx")))
 
             # -- Activity workbooks (9) --------------------------
