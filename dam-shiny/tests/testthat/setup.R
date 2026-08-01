@@ -39,7 +39,11 @@ for (f in engine_files) source(file.path(app_root, "R", f))
 if (requireNamespace("shiny", quietly = TRUE)) {
   suppressPackageStartupMessages(library(shiny))
   source(file.path(app_root, "R", "utils_state.R"))
-  source(file.path(app_root, "R", "mod_group_manager.R"))
+  # Module files define functions only; their UI halves reference
+  # shinydashboard::box() but nothing runs at source() time.
+  for (m in c("mod_group_manager.R", "mod_position_sleep.R", "mod_downloads.R")) {
+    source(file.path(app_root, "R", m))
+  }
 }
 
 # Path to bundled sample monitors.

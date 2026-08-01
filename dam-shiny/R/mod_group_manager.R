@@ -56,7 +56,12 @@ mod_group_manager_ui <- function(id) {
           numericInput(ns("death_thr"), "Death thr (h)",   cfg$death_threshold_hours, 1, 72),
           numericInput(ns("bout_win"),  "Bout win (min)",  cfg$bout_window_min, 1, 60)
         ),
-        checkboxInput(ns("use_anchored"), "Use anchor method", isTRUE(cfg$use_anchored))
+        # Output selector, not an analysis switch: both zone methods run on
+        # every group regardless of this. Seeds each new group's config; the
+        # Position & Sleep tab edits it per group afterwards.
+        checkboxInput(ns("use_anchored"),
+                      "Use anchor method for plots & exports",
+                      isTRUE(cfg$use_anchored))
       ),
       box(
         title = "Groups", width = 4, status = "info", solidHeader = TRUE,
