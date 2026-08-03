@@ -23,11 +23,28 @@ mod_downloads_server <- function(id, rv) {
 
     output$status <- renderUI({
       gs <- done_groups(rv)
-      if (!length(gs)) {
-        tags$em("No completed groups yet. Run a group first.")
-      } else {
-        tags$ul(lapply(gs, function(g) tags$li(g$label)))
-      }
+      if (!length(gs)) return(tags$em("No completed groups yet. Run a group first."))
+
+      d <- bundle_divergence(gs)
+      tagList(
+        tags$ul(lapply(gs, function(g) tags$li(g$label))),
+        # Surfaced here as well as in the bundle: this catches it while the
+        # user can still act, where the bundle file is what survives to
+        # whoever opens the artefacts later. Neither alone is enough.
+        if (d$any) tags$div(
+          style = paste("border:1px solid #c00; background:#fdf2f2;",
+                        "padding:8px; border-radius:4px; font-size:12px;"),
+          tags$b("These groups differ in analysis parameters."),
+          tags$div("Comparing them directly may be method-confounded:"),
+          tags$ul(lapply(seq_len(nrow(d$table)), function(i) {
+            r <- d$table[i, ]
+            tags$li(tags$b(r[["Parameter"]]), ": ",
+                    paste(sprintf("%s = %s", names(r)[-1], unlist(r[-1])),
+                          collapse = "   |   "))
+          })),
+          tags$div(tags$em("The bundle records this in PROVENANCE.txt."))
+        )
+      )
     })
 
     output$bundle <- downloadHandler(
@@ -76,6 +93,7 @@ mod_downloads_server <- function(id, rv) {
               unknown_diag = g$unknown_diag, anchors = g$anchors,
               group_label = g$label,
               use_anchored = ua,
+              provenance = group_provenance_extra(g),
               output_file = file.path(gdir, paste0(slug, "_results.xlsx")))
 
             # -- Activity workbooks (9) --------------------------
@@ -94,9 +112,24 @@ mod_downloads_server <- function(id, rv) {
             data.table::fwrite(g$chrono_long,
                                file.path(gdir, paste0(slug, "_chronogram_summed_10min.csv")))
 
+            # -- Provenance (TXT) --------------------------------
+            # Written for EVERY done group, aligned or not: a missing file
+            # would have to be interpreted, and "no alignment happened" and
+            # "nobody recorded whether it did" are different statements.
+            prov <- group_provenance_df(g)
+            writeLines(
+              c(sprintf("Provenance -- %s", g$label), strrep("=", 60), "",
+                sprintf("%-24s %s", prov$Parameter, prov$Value)),
+              file.path(gdir, paste0(slug, "_provenance.txt")))
+
             incProgress(1 / n, detail = g$label)
           }
         })
+
+        # Bundle-root record. Unconditional: it states either that the groups
+        # agree or exactly how they differ, so the absence of a warning is
+        # never something a reader has to interpret.
+        writeLines(bundle_provenance_text(gs), file.path(root, "PROVENANCE.txt"))
 
         old <- setwd(root); on.exit(setwd(old), add = TRUE)
         zip::zipr(zipfile = file, files = list.files(root, recursive = FALSE))

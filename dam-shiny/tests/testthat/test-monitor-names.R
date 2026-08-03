@@ -43,10 +43,11 @@ test_that("the log shows the original upload names, not the datapaths", {
   # The bug was that three distinct monitors were indistinguishable.
   expect_equal(length(unique(lines)), 3L)
 
-  # The upload name leads; the datapath it was stored under is kept as the
-  # "read from" part rather than dropped, so the line stays literally true
-  # about which file was opened.
-  expect_match(lines[1], "Monitor7\\.txt \\(read from 0\\.txt\\)")
+  # A plain upload shows the name alone. The datapath it happens to be stored
+  # under is an implementation detail, and annotating every line with it was
+  # noise; the aligned flag now carries the case that genuinely needs saying.
+  expect_match(lines[1], "Reading \\[plug\\]: Monitor7\\.txt$")
+  expect_false(any(grepl("0.txt", lines, fixed = TRUE)))
 })
 
 test_that("without upload names the log falls back to the file's own basename", {
@@ -74,11 +75,21 @@ test_that("an aligned temp copy is shown as read-from, not as the upload", {
 
   out <- utils::capture.output(
     suppressWarnings(read_position_monitors(mf, channels = 1:4, tz = "UTC",
-                                            source_names = u$names)))
+                                            source_names = u$names,
+                                            aligned = TRUE)))
   lines <- .reading_lines(out)
-  # Both facts present: which upload it came from, and which file was read.
+  # Both facts present: which upload it came from, and that the run read a
+  # repaired copy rather than the upload itself.
   expect_match(lines[1], "Monitor7.txt", fixed = TRUE)
   expect_match(lines[1], "Monitor7_aligned.txt", fixed = TRUE)
+  expect_match(lines[1], "aligned copy", fixed = TRUE)
+
+  # Without the flag the same paths read as a plain upload -- the flag, not
+  # the filename, is what distinguishes them.
+  out2 <- utils::capture.output(
+    suppressWarnings(read_position_monitors(mf, channels = 1:4, tz = "UTC",
+                                            source_names = u$names)))
+  expect_false(any(grepl("aligned copy", .reading_lines(out2), fixed = TRUE)))
 })
 
 test_that("the worker payload carries the upload names", {

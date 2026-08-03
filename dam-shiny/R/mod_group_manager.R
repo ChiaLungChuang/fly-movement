@@ -378,6 +378,9 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     dam_lean_group <- function(g, aligned = NULL) {
       lean <- g[c("id", "label", "color", "monitor_paths", "monitor_names",
                   "config")]
+      # Whether THIS run reads aligned copies, which is what lets the reader
+      # label them without guessing from the filename.
+      lean$aligned <- !is.null(aligned)
       if (!is.null(aligned)) {
         lean$monitor_paths <- as.list(aligned[dam_roles])
       }
@@ -550,6 +553,13 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
                      middle = unname(paths["middle"]),
                      food   = unname(paths["food"]))
         dam_cache_put(gid, g$monitor_paths, aligned)
+        # Record the alignment on the group itself. monitor_paths is still not
+        # touched -- the group keeps describing the user's uploads -- but the
+        # report has to outlive rv$log, which is shared, clearable, and gone at
+        # session end while the repaired data travels on into figures.
+        g$aligned          <- TRUE
+        g$alignment_report <- plan$report
+        rv$groups[[gid]]   <- g
         append_log(rv, c(sprintf("\n----- Aligned '%s' before run -----", g$label),
                          plan$report))
         showNotification(sprintf("Aligned '%s'; running.", g$label), type = "message")
