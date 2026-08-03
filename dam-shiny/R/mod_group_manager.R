@@ -53,10 +53,22 @@ mod_group_manager_ui <- function(id) {
         textInput(ns("channels"), "Channels", cfg$channels),
         splitLayout(
           numericInput(ns("sleep_thr"), "Sleep thr (min)", cfg$sleep_threshold_min, 1, 60),
-          numericInput(ns("death_thr"), "Death thr (h)",   cfg$death_threshold_hours, 1, 72),
+          # Ceiling is one week, not 72 h: a three-day recording can show a
+          # maximum inactivity above 72 (73.6 h observed), so the old cap made
+          # "nothing is dead" inexpressible on exactly the data that needed it.
+          # There is no server-side clamp, and `max` on a number input is a
+          # hint rather than a block, so this control is the only supported
+          # route to a higher threshold. bundle_divergence() records the value
+          # per group, so a non-default threshold travels with the export.
+          numericInput(ns("death_thr"), "Death thr (h)",   cfg$death_threshold_hours, 1, 168),
           numericInput(ns("bout_win"),  "Bout win (min)",  cfg$bout_window_min, 1, 60)
         ),
-        checkboxInput(ns("use_anchored"), "Use anchor method", isTRUE(cfg$use_anchored))
+        # Output selector, not an analysis switch: both zone methods run on
+        # every group regardless of this. Seeds each new group's config; the
+        # Position & Sleep tab edits it per group afterwards.
+        checkboxInput(ns("use_anchored"),
+                      "Use anchor method for plots & exports",
+                      isTRUE(cfg$use_anchored))
       ),
       box(
         title = "Groups", width = 4, status = "info", solidHeader = TRUE,
@@ -373,6 +385,9 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     dam_lean_group <- function(g, aligned = NULL) {
       lean <- g[c("id", "label", "color", "monitor_paths", "monitor_names",
                   "config")]
+      # Whether THIS run reads aligned copies, which is what lets the reader
+      # label them without guessing from the filename.
+      lean$aligned <- !is.null(aligned)
       if (!is.null(aligned)) {
         lean$monitor_paths <- as.list(aligned[dam_roles])
       }
@@ -545,6 +560,13 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
                      middle = unname(paths["middle"]),
                      food   = unname(paths["food"]))
         dam_cache_put(gid, g$monitor_paths, aligned)
+        # Record the alignment on the group itself. monitor_paths is still not
+        # touched -- the group keeps describing the user's uploads -- but the
+        # report has to outlive rv$log, which is shared, clearable, and gone at
+        # session end while the repaired data travels on into figures.
+        g$aligned          <- TRUE
+        g$alignment_report <- plan$report
+        rv$groups[[gid]]   <- g
         append_log(rv, c(sprintf("\n----- Aligned '%s' before run -----", g$label),
                          plan$report))
         showNotification(sprintf("Aligned '%s'; running.", g$label), type = "message")

@@ -11,7 +11,9 @@ mod_position_sleep_ui <- function(id) {
       box(width = 12, status = "primary", solidHeader = TRUE, title = "Group & method",
           fluidRow(
             column(6, selectInput(ns("group"), "Group", choices = NULL)),
-            column(6, radioButtons(ns("method"), "Zone method",
+            # Edits this group's stored output method -- what the bundle
+            # exports, not just what is drawn below.
+            column(6, radioButtons(ns("method"), "Zone method for outputs",
                                    c("Anchor" = "anchor", "State machine" = "sm"),
                                    inline = TRUE))
           )
@@ -54,7 +56,55 @@ mod_position_sleep_server <- function(id, rv) {
       rv$groups[[gid]]
     })
 
-    use_anchored <- reactive(identical(input$method, "anchor"))
+    # -- Zone method: the group's config is the single source of truth -----
+    # Both zone methods run on every group regardless; use_anchored selects
+    # which columns the OUTPUTS read. This radio therefore EDITS the group
+    # rather than shadowing it, so the Downloads bundle -- which reads
+    # config$use_anchored -- can never disagree with what is on screen. The
+    # add-group checkbox supplies the initial value.
+
+    # ignoreInit on the writer below matters in the live app but not under
+    # testServer: the radio always holds a value in a browser, so without it
+    # the session's first flush would write that default onto whichever group
+    # is focused. testServer leaves input$method NULL until set, and
+    # observeEvent's ignoreNULL default swallows it, so no test can tell the
+    # difference. Kept because the browser behaves differently from the mock.
+
+    # Show the focused group's own method. This is a sync, never a user edit.
+    observeEvent(input$group, {
+      g <- if (is.null(input$group)) NULL else rv$groups[[input$group]]
+      req(g)
+      updateRadioButtons(session, "method",
+        selected = if (isTRUE(g$config$use_anchored)) "anchor" else "sm")
+    })
+
+    # What stops a group being restamped merely by being VIEWED is that this
+    # observer keys on input$method ALONE. A group switch does not change
+    # input$method, so it cannot trigger a write; the sync above pushes the new
+    # group's own value, and the client echo that follows carries that same
+    # value. Widening this to observeEvent(list(input$group, input$method))
+    # reintroduces the bug, which is what the view-does-not-modify test pins.
+    observeEvent(input$method, ignoreInit = TRUE, {
+      gid <- input$group
+      g <- if (is.null(gid)) NULL else rv$groups[[gid]]
+      req(g)
+      want <- identical(input$method, "anchor")
+      # Not correctness -- the echo carries the value already stored, so
+      # writing it would be a no-op. It avoids re-writing rv$groups on every
+      # group switch, which would invalidate the table and every plot for
+      # nothing. No test distinguishes this; it is a thrash guard.
+      if (identical(isTRUE(g$config$use_anchored), want)) return()
+      g$config$use_anchored <- want
+      rv$groups[[gid]] <- g
+    })
+
+    # Read the stored value, not the control, so the rendered plots and the
+    # exported ones are driven by the same field by construction.
+    use_anchored <- reactive({
+      g <- if (is.null(input$group)) NULL else rv$groups[[input$group]]
+      if (is.null(g)) identical(input$method, "anchor")
+      else isTRUE(g$config$use_anchored)
+    })
 
     p_timelines <- reactive({
       g <- grp()

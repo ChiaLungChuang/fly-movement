@@ -81,6 +81,124 @@ uploaded files. Timestamps are parsed as naive wall-clock (`tz` is internal,
 fixed to `UTC`), so the dates/times shown always match the files with no
 timezone shift; there is no timezone control in the UI.
 
+## Zone methods — both always run
+
+Two independent zone assignments are computed for **every** group, in this
+order, and neither is conditional:
+
+```
+assign_position_zones()     -> zone / sleep_zone / bout_start          (state machine)
+assign_position_anchored()  -> zone_anchored / sleep_zone_anchored / … (anchor method)
+```
+
+`use_anchored` selects **which column set is displayed and exported**, not
+which computation runs. Nothing in `run_group_pipeline()` branches on it.
+
+This matters when reading the Engine log. The line
+
+```
+Assigning position zones (state machine)
+```
+
+names the step that is running at that moment; the anchor pass is logged
+separately a few steps later ("Anchor-based position assignment"). Seeing the
+state-machine line does **not** mean the anchor method was skipped — it never
+is.
+
+### Where the method is chosen
+
+The group's `config$use_anchored` is the single source of truth (since
+`f9d5e5e`). Two controls write it:
+
+| Control | Effect |
+|---|---|
+| "Use anchor method for plots & exports" checkbox, Groups tab | Seeds the value for **newly added** groups, like every other run setting in that panel |
+| "Zone method for outputs" radio, Position & Sleep tab | **Initialises from** the focused group's config, and **writes back** to it when changed |
+
+The radio is not view-only. Selecting a different group re-syncs the radio to
+that group's stored value; changing the radio edits the group. Both the
+on-screen plots and the Downloads bundle read `config$use_anchored`, so they
+cannot disagree.
+
+Merely *viewing* a group does not modify it. The write-back observer keys on
+the radio input alone, so a group switch cannot trigger a write.
+
+## Provenance in exports
+
+Every bundle records how it was made.
+
+| Artefact | Contents |
+|---|---|
+| `PROVENANCE.txt` (bundle root) | Written unconditionally. States either "All groups share identical analysis parameters" or a per-parameter table of exactly how they differ, with each group's own value. |
+| `<group>_provenance.txt` | Written for **every** completed group. Zone method, source files (original upload names, not Shiny datapaths), alignment status and report, analysis window, channels, thresholds. |
+| `Provenance` sheet in `results.xlsx` | The same record inside the workbook, so a file that gets emailed on its own still says what produced it. |
+
+A group that needed no alignment gets an explicit `not required — files already
+matched` line rather than no line: absence of a record must never be something
+a reader has to interpret.
+
+The divergence check compares zone method, alignment status, death and sleep
+thresholds, lights on/off, channels, and bout window. Divergence is also shown
+in the Downloads tab before download — that surface catches it while you can
+still act, the bundle file is what survives to whoever opens the artefacts
+later.
+
+### Reproducibility warning — workbooks predating `8f68538`
+
+**This is a numbers change, not a labelling change.**
+
+Before commit `8f68538`, `export_results_excel()` read `sleep_zone_anchored`,
+`zone_anchored` and `bout_start_anchored` unconditionally, ignoring
+`use_anchored` entirely. So:
+
+- Any `results.xlsx` **without** a `Provenance` sheet is **anchor-method by
+  construction**, whatever the group's setting was at the time. That rule is
+  the only way to interpret such a file.
+- For a **state-machine** group, `Per_fly` and `Group_summary` were derived
+  from the anchor columns. The same input re-exported after `8f68538` will
+  contain **different per-fly zone counts**. Both files are internally
+  consistent; they report different things.
+- Anchor-method groups are unaffected — the new default reproduces the old
+  behaviour exactly.
+
+## Duplicated engine files
+
+Parts of the engine exist as independent copies, not a shared library. Nothing
+makes an edit to one reach another.
+
+| Copy | In the agreement set? |
+|---|---|
+| `dam-shiny/R/05_export.R` | **yes** — sourced by the app |
+| `R/05_export.R` (repo root) | **yes** — sourced by `run_position.R` |
+| `_original_backup/DAM position pipeline.R` | no — pre-modular archive, frozen by intent |
+| `~/Desktop/DAM position/DAM position pipeline.R` | no — separate project; its body already differs (different lineage, not drift) |
+| `~/Desktop/DAM alinger/dam-shiny-integration/` | no — standalone repo, no remote, superseded staging work already imported here |
+
+The agreement set is exactly `{R/05_export.R, dam-shiny/R/05_export.R}`. Check
+it with:
+
+```sh
+Rscript dam-shiny/tools/engine_copy_diff.R
+```
+
+Exit 0 when the set is identical, 1 on drift or a missing file, 2 on bad usage.
+Kept out of the test suite deliberately — it is a repo-layout invariant, and
+the suite runs against `dam-shiny/` alone.
+
+Two files in root `R/` have **deliberately** forked and are classified FORKED
+rather than checked. Syncing them would break the app:
+
+| File | Why it differs |
+|---|---|
+| `01_read_qc.R` | app adds `tz` and `source_names` (upload-name logging) |
+| `04_plots.R` | app adds `output_file = NULL` support for return-only plots |
+
+Any file in root `R/` appearing in neither list **fails** the check, so a new
+engine file cannot be added without someone classifying it.
+
+Root `R/` has not been modified since the initial commit. De-duplicating
+properly is a queued ticket (see **Known limitations**), not done.
+
 ## Async runs
 
 Group runs execute in a **background R process** (`ExtendedTask` + `future`),
@@ -109,12 +227,43 @@ Rscript tests/testthat.R                               # engine unit + integrati
 Rscript -e 'shinytest2::test_app("tests/shinytest2")'  # app happy-path (needs shinytest2 + chromote)
 ```
 
-The `testthat` suite covers `beam_to_zone`, `classify_transit`,
+The `testthat` suite (**221 passing**) covers the engine primitives
+(`beam_to_zone`, `classify_transit`,
 `make_activity_chronogram`/`summarize_activity`, `detect_dead_channels`,
-`add_time_metadata`, `parse_channels`, the config reader, and a full
-`run_group_pipeline` integration run on the bundled sample data. The
-`shinytest2` test drives the live app (add demo group → run → check QC +
+`add_time_metadata`, `parse_channels`, the config reader), a full
+`run_group_pipeline` integration run on the bundled sample data, and the
+app-level behaviour added since: alignment integration and the missing-path
+guard, group-selection identity, the empty-channel guard, upload-name logging,
+zone-method single-source-of-truth, workbook method selection, and provenance.
+The `shinytest2` test drives the live app (add demo group → run → check QC +
 chronogram render) and skips itself when `shinytest2` isn't installed.
+
+### Coverage honesty
+
+New guards are mutation-tested: the guard is removed, the suite re-run, and the
+change kept only if a test actually fails. Two guards survive that check
+**uncovered**, and are commented as such in the source rather than left to look
+tested:
+
+- the **compare-and-skip** in the zone-method write-back
+  (`mod_position_sleep.R`) is a thrash guard, not correctness — the client echo
+  carries the value already stored, so removing it causes a redundant write,
+  not a wrong one;
+- **`ignoreInit`** on the same observer matters only in a browser, where the
+  radio always holds a value. `testServer` leaves the input `NULL` until set
+  and `observeEvent`'s `ignoreNULL` default swallows it, so no test can
+  distinguish it.
+
+Two `testServer` limits worth knowing before writing module tests:
+
+- **Stubbing a function that the module resolves in its own environment does
+  not work.** Rebinding `run_one` inside a `testServer` block does not reach
+  `request_run`, and `<<-` from there writes to the global environment rather
+  than the test's. Assert on observable module state instead (`queue()`,
+  `pending_gids()`, `rv$groups`).
+- **A module must be sourced in `tests/testthat/setup.R` to be testable.**
+  Three zone-method tests initially reported green while silently *skipping*,
+  because `mod_position_sleep.R` was not sourced.
 
 ### Continuous integration
 
@@ -149,14 +298,62 @@ session temp files.
   `07_activity.R` (`add_time_metadata`, `build_activity_summaries`,
   `write_activity_workbook`, …). `run_activity.R` keeps its inline copy, so
   headless runs are unaffected.
+- `export_results_excel()` takes `use_anchored` (default `TRUE`) and an
+  optional `provenance` data frame, and always writes a `Provenance` sheet.
+  The default reproduces the pre-`8f68538` behaviour exactly, so
+  `run_position.R` is unchanged until it opts in. **Both copies of
+  `05_export.R` carry this** — see **Duplicated engine files**.
 
-## Notes / limits
+## Known limitations and open questions
 
-- Runs are asynchronous (see **Async runs** above); the anchor pass is the slow
-  part of a run. Multiple groups process sequentially in the background.
+### Limitations
+
+- **Duplicated engine files.** `05_export.R` exists as two independent copies
+  that must be edited together (see **Duplicated engine files**).
+  `engine_copy_diff.R` detects drift; it does not prevent it.
+  De-duplicating properly — one copy, sourced by both the app and
+  `run_position.R` — is a queued ticket.
+- **Workbooks predating `8f68538`** have no `Provenance` sheet and are
+  anchor-method by construction. For a state-machine group the per-fly zone
+  counts differ from a re-export. See the reproducibility warning above.
+- **Two guards are uncovered by tests** (the thrash guard and `ignoreInit`);
+  see **Coverage honesty**.
+- **A run where every channel is classified dead stops with an error** rather
+  than returning a result. The per-channel detail is still printed to the
+  Engine log, but the group never reaches `done`, so it does not appear in the
+  QC tab or in Downloads. Raise the death threshold to inspect such a
+  recording.
+- **Death threshold accepts 1–168 h** (one week). The previous ceiling was
+  72 h, which made "nothing is dead" inexpressible on a three-day recording
+  whose observed maximum inactivity was 73.6 h. Thresholds above the old cap
+  are now expressible through the control itself, and `bundle_divergence()`
+  records the value per group, so a diagnostic run at a non-default threshold
+  travels with the export and shows up as a divergence if groups disagree.
+  There is still no server-side clamp: `max` on a number input is a validation
+  hint, not a block, so a value typed past the spinner may or may not reach the
+  engine depending on the browser. The control is the supported route.
+- The anchor pass is the slow part of a run. Multiple groups process
+  sequentially in the background.
 - No absolute paths; uploads use session temp files. Upload limit is
   configurable in `config.yml` (`max_upload_mb`, default 250).
 - `Time_min` in chronogram data is elapsed **seconds** (Rtivity convention).
-- Async runs (`ExtendedTask`/`future`) are the one remaining Phase 4 item not
-  yet wired; see `SHINY_APP_PLAN.md` §9.
-```
+
+### Open questions
+
+- **The 5-minute pre-window offset is unresolved.** `read_position_monitors()`
+  discards rows before `common_start + 300 s`, while
+  `assign_position_zones()` separately trims to the user's `analysis_start`.
+  With the period selector's default (the common file start) the trim removes
+  nothing, so the first five minutes are dropped and the state machine gets no
+  warm-up. Verified: the trim removes 0 rows in that case and invents none, so
+  **nothing is padded and no inactivity run can be inflated by it** — but the
+  logged "Analysis start" names a timestamp that is not in the output.
+  Whether the offset is a settling discard, a warm-up lead-in, or two
+  mechanisms that disagree in the default case is a biology question and is
+  **not settled**. Do not treat the current behaviour as intentional or as a
+  bug until it is decided.
+- **A queued run's result can in principle be dropped.** When two or more runs
+  are queued on the single `ExtendedTask`, the transition to `success` for an
+  earlier run can be overwritten by the next run's `running` before Shiny
+  flushes, so the observer never collects it. Reproduced in isolation; **not
+  observed in the live app**, where a real pipeline takes seconds. Parked.

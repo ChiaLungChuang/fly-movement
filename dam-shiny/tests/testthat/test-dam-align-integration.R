@@ -236,6 +236,14 @@ test_that("confirming alignment leaves monitor_paths on the originals", {
     # 1. the group still points at what the user uploaded
     expect_equal(rv$groups$g1$monitor_paths, originals)
 
+    # 1b. and it now RECORDS that it was aligned, with the report. Without
+    #     this the report exists only in rv$log -- shared across groups,
+    #     clearable by a button, and gone at session end -- while the repaired
+    #     data travels on into every exported figure.
+    expect_true(isTRUE(rv$groups$g1$aligned))
+    expect_gt(length(rv$groups$g1$alignment_report), 0)
+    expect_true(any(grepl("blank line", rv$groups$g1$alignment_report)))
+
     # 2. the run got the temps instead. dam_lean_group() is the payload handed
     #    to run_task$invoke(); assert on it directly, since the task itself
     #    cannot be intercepted from here.

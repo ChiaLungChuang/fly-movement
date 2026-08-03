@@ -36,6 +36,12 @@ new_group <- function(group_id,
     # Original upload names by role. Shiny's fileInput datapaths are generated
     # ("0.txt"), so these are the only record of which file is which.
     monitor_names = list(plug = NULL, middle = NULL, food = NULL),
+    # Alignment provenance. `aligned` is explicit rather than inferred from a
+    # path, so an exported artefact can state which it was; alignment_report
+    # holds dam_plan_alignment()'s report, which otherwise lived only in
+    # rv$log -- shared, clearable, and gone at session end.
+    aligned          = FALSE,
+    alignment_report = NULL,
     config = list(
       channels              = 1:32,
       start_datetime        = NULL,   # detected from files (app) or set by caller
@@ -132,7 +138,8 @@ run_group_pipeline <- function(g, progress = NULL, log = NULL) {
   monitors <- capture_engine(
     read_position_monitors(mf, cfg$channels,
                            cfg$start_datetime, cfg$end_datetime, cfg$tz,
-                           source_names = g$monitor_names))
+                           source_names = g$monitor_names,
+                           aligned = isTRUE(g$aligned)))
 
   step(0.20, "Detecting dead channels")
   dead_summary <- capture_engine(
@@ -194,4 +201,139 @@ run_group_pipeline <- function(g, progress = NULL, log = NULL) {
     status       = "done",
     error        = NULL
   )
+}
+
+
+# ============================================================
+# PROVENANCE
+#
+# Every exported artefact has to say how it was made. These build one record
+# per group, used both for the Provenance sheet inside results.xlsx and for
+# the .txt that travels in the bundle, so the two cannot drift apart.
+# ============================================================
+
+# The app-level rows: everything export_provenance_df() cannot know by itself.
+group_provenance_extra <- function(g) {
+  cfg <- g$config
+  nm  <- g$monitor_names
+  roles <- c("plug", "middle", "food")
+
+  # Real upload names. Falls back to the path's basename only when a group
+  # predates monitor_names -- a datapath is better than nothing, but it is not
+  # what the user chose.
+  files <- vapply(roles, function(r) {
+    v <- nm[[r]]
+    if (!is.null(v) && length(v) == 1L && !is.na(v) && nzchar(v)) as.character(v)
+    else {
+      p <- g$monitor_paths[[r]]
+      if (is.null(p) || !length(p)) "(unknown)" else basename(as.character(p))
+    }
+  }, character(1))
+
+  win <- if (is.null(g$dat) || !nrow(g$dat)) "(no data)" else
+    sprintf("%s to %s",
+            format(min(g$dat$datetime), "%Y-%m-%d %H:%M"),
+            format(max(g$dat$datetime), "%Y-%m-%d %H:%M"))
+
+  chans <- if (is.null(g$dat) || !nrow(g$dat)) "(none)" else
+    paste(sort(unique(g$dat$channel)), collapse = ", ")
+
+  rows <- data.frame(
+    Parameter = c("Source files", "Alignment", "Analysis window",
+                  "Channels analysed", "Death threshold (h)",
+                  "Sleep threshold (min)", "Lights on", "Lights off",
+                  "Bout window (min)"),
+    Value = c(
+      sprintf("plug=%s, middle=%s, food=%s", files[1], files[2], files[3]),
+      # Stated either way round: absence of a line must never need interpreting.
+      if (isTRUE(g$aligned)) "aligned before analysis (see detail below)"
+      else "not required -- files already matched",
+      win, chans,
+      as.character(cfg$death_threshold_hours),
+      as.character(cfg$sleep_threshold_min),
+      as.character(cfg$lights_on), as.character(cfg$lights_off),
+      as.character(cfg$bout_window_min)
+    ),
+    stringsAsFactors = FALSE
+  )
+
+  if (isTRUE(g$aligned) && length(g$alignment_report)) {
+    rows <- rbind(rows, data.frame(
+      Parameter = paste("Alignment detail", seq_along(g$alignment_report)),
+      Value     = as.character(g$alignment_report),
+      stringsAsFactors = FALSE))
+  }
+  rows
+}
+
+# The full record: the workbook's base rows plus the app-level ones.
+group_provenance_df <- function(g) {
+  export_provenance_df(g$label, isTRUE(g$config$use_anchored),
+                       group_provenance_extra(g))
+}
+
+# Analysis parameters compared across a bundle's groups. Alignment is included
+# deliberately: a bundle mixing repaired and pristine data is a divergence with
+# scientific consequences and would fall straight through a config-only check.
+.bundle_params <- list(
+  "Zone method"           = function(g) if (isTRUE(g$config$use_anchored)) "anchor" else "state machine",
+  "Alignment"             = function(g) if (isTRUE(g$aligned)) "aligned" else "not required",
+  "Death threshold (h)"   = function(g) as.character(g$config$death_threshold_hours),
+  "Sleep threshold (min)" = function(g) as.character(g$config$sleep_threshold_min),
+  "Lights on"             = function(g) as.character(g$config$lights_on),
+  "Lights off"            = function(g) as.character(g$config$lights_off),
+  "Channels"              = function(g) paste(g$config$channels, collapse = ","),
+  "Bout window (min)"     = function(g) as.character(g$config$bout_window_min)
+)
+
+# Per-parameter, with each group's own value -- a bundle differing only in
+# lights_on is a different scientific problem from one differing in zone
+# method, and a single "groups differ" flag would lose that.
+bundle_divergence <- function(gs) {
+  labels <- vapply(gs, function(g) as.character(g$label), character(1))
+  empty  <- data.frame(Parameter = character(), stringsAsFactors = FALSE)
+  if (length(gs) < 2L) return(list(any = FALSE, table = empty, labels = labels))
+
+  rows <- list()
+  for (p in names(.bundle_params)) {
+    vals <- vapply(gs, .bundle_params[[p]], character(1))
+    if (length(unique(vals)) > 1L) {
+      r <- as.data.frame(as.list(setNames(vals, labels)), stringsAsFactors = FALSE,
+                         check.names = FALSE)
+      rows[[length(rows) + 1L]] <- cbind(Parameter = p, r, stringsAsFactors = FALSE)
+    }
+  }
+  tbl <- if (length(rows)) do.call(rbind, rows) else empty
+  list(any = nrow(tbl) > 0L, table = tbl, labels = labels)
+}
+
+# The bundle-root record. Written unconditionally: it states either that the
+# groups agree or exactly how they do not, so a reader never has to interpret
+# the absence of a warning.
+bundle_provenance_text <- function(gs) {
+  d <- bundle_divergence(gs)
+  head <- c("DAM analysis bundle -- provenance",
+            strrep("=", 60),
+            sprintf("Groups in this bundle: %d (%s)",
+                    length(gs), paste(d$labels, collapse = ", ")),
+            "")
+
+  body <- if (!d$any) {
+    c("All groups share identical analysis parameters.",
+      "Comparisons across these groups are not method-confounded.", "")
+  } else {
+    tbl <- d$table
+    lines <- apply(tbl, 1, function(r) {
+      sprintf("  %-22s %s", r[["Parameter"]],
+              paste(sprintf("%s=%s", names(r)[-1], r[-1]), collapse = "   "))
+    })
+    c("WARNING -- THESE GROUPS DIFFER IN ANALYSIS PARAMETERS.",
+      "Comparing them directly may be method-confounded. Differing values:",
+      "", unname(lines), "",
+      "Parameters not listed above are identical across all groups.", "")
+  }
+
+  c(head, body,
+    "Per-group detail is in each group's own _provenance.txt.",
+    "Each results.xlsx also carries a Provenance sheet.")
 }
