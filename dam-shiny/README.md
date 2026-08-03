@@ -360,6 +360,38 @@ session temp files.
   configurable in `config.yml` (`max_upload_mb`, default 250).
 - `Time_min` in chronogram data is elapsed **seconds** (Rtivity convention).
 
+- **Which uploaded file is which position is a convention, not a fact the app
+  can check.** The three file pickers are labelled Plug-end, Middle and
+  Food-end, and whichever file the user puts in each box *becomes* that role.
+  Nothing validates the assignment: `read_position_monitors()` checks only that
+  the three names are present, never what the files contain.
+
+  This is a live trap because the orders disagree. Within an apparatus the
+  monitors run **food, central, plug** in file order, which is the reverse of
+  the `$plug / $middle / $food` slot naming and the reverse of the order the
+  pickers appear in. A user working down the form in file order transposes the
+  two ends.
+
+  The consequence is silent and total. Zones are defined by which beams break:
+  `Z1` = plug only, `Z4` = food only, `Z2` = plug+middle, `Z3` = middle+food.
+  Swapping the plug and food files maps `Z1`↔`Z4` and `Z2`↔`Z3` — **every zone
+  assignment mirrors**. There is no error, no warning, and no internal
+  inconsistency, because the transposition is an exact symmetry of the data:
+  every structural property the pipeline could check (a fly must cross the
+  middle to travel end to end, transit classification, anchor confidence) is
+  preserved under the mirror. A mirrored run is indistinguishable from a
+  correct one by inspection of the results alone.
+
+  Provenance does not rescue this, and is worth being precise about. The
+  filename-to-slot assignment **is** recorded — `Source files: plug=…,
+  middle=…, food=…` appears in each group's `_provenance.txt` and in the
+  `Provenance` sheet (it is *not* among the parameters the bundle-root
+  divergence table compares). But recording which file went into which slot is
+  not the same as recording whether that was right: the artefacts state the
+  assignment faithfully, and a transposed run is therefore recorded, correctly,
+  as exactly the wrong thing. Provenance records what was done, not whether it
+  should have been.
+
 ### Open questions
 
 - **The 5-minute pre-window offset is unresolved.** `read_position_monitors()`
