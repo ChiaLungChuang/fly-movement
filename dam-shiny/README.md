@@ -376,11 +376,70 @@ session temp files.
   `Z1` = plug only, `Z4` = food only, `Z2` = plug+middle, `Z3` = middle+food.
   Swapping the plug and food files maps `Z1`↔`Z4` and `Z2`↔`Z3` — **every zone
   assignment mirrors**. There is no error, no warning, and no internal
-  inconsistency, because the transposition is an exact symmetry of the data:
+  inconsistency, because the transposition is an exact symmetry of the *data*:
   every structural property the pipeline could check (a fly must cross the
   middle to travel end to end, transit classification, anchor confidence) is
-  preserved under the mirror. A mirrored run is indistinguishable from a
-  correct one by inspection of the results alone.
+  preserved under the mirror. **No check on the recorded beam data can
+  distinguish the two**, and any check that tried would have to lean on a prior
+  about where flies prefer to spend time — a biological assumption that varies
+  by genotype and condition, and one that would bias exactly the comparison it
+  was meant to protect.
+
+  **The filenames, however, sit outside the data and do break the tie.** Within
+  each apparatus the monitors run food, central, plug in file order, repeating
+  every three across the four apparatus, so for `MonitorN.txt` the role is
+  `(N - 1) mod 3` — 0 food, 1 central, 2 plug. A transposed assignment
+  contradicts the filenames arithmetically, with no appeal to fly behaviour,
+  and it catches a uniformly transposed experiment as readily as a partial one.
+  An earlier revision of this section claimed no check in the software could
+  detect the uniform case. That was wrong, and this is why.
+
+  Two limits on that check, both real:
+
+  - It holds only while the `MonitorN` naming convention holds. Renamed or
+    re-exported files carry no such information, so the check must stay silent
+    on anything that does not parse, and must **warn rather than block** — a
+    hard failure would make legitimately-named-otherwise data unusable.
+  - It validates against a *declared convention*, not physical reality. A rig
+    wired against the convention would pass it confidently and wrongly. It
+    narrows the failure to "the wiring disagrees with the declaration", which
+    is worth catching, but it is not proof the assignment is correct.
+
+  **Worth resolving before relying on either:** this repo's own demo group and
+  test fixtures assign `Monitor7 → plug`, `Monitor8 → middle`,
+  `Monitor9 → food`, while the convention above gives `Monitor7 → food` and
+  `Monitor9 → plug`. Either the bundled samples do not follow the rig
+  convention, or the demo mapping is itself transposed. Nothing here depends on
+  the answer yet — no test asserts a zone *direction* — but the guard below
+  cannot be written until it is settled, and if the convention does apply to
+  those files then every zone figure produced from the demo is mirrored.
+
+  *Queued guards, none implemented.* In order of value per unit of work:
+
+  1. **Fix the ordering trap at source.** The pickers read Plug → Middle →
+     Food while the files arrive food, central, plug. Reordering them to match
+     apparatus file order, or labelling each with the monitor number the
+     convention expects, attacks the cause rather than detecting the effect,
+     and is a few lines of UI text.
+  2. **Confirm the mapping at add-group time, and check it against the
+     convention.** Reuse the existing alignment-confirmation modal: show the
+     derived slot-to-file mapping and flag where it disagrees with the declared
+     convention, so the user sees both the assignment and the objection while
+     they still know which monitor sat where. This is where the `(N - 1) mod 3`
+     check belongs — it needs a human to adjudicate, not a hard stop. The
+     convention itself belongs in an explicit declaration (config, or a
+     per-experiment setting), not as a constant buried inside the check,
+     precisely because a rig may legitimately differ and should then be
+     re-declared rather than have the check edited.
+  3. **Add source files to the divergence table.** Cheap, and it catches the
+     common partial case where one group is transposed and others are not. It
+     cannot catch a uniformly transposed set on its own, so it complements 1
+     and 2 rather than replacing them.
+
+  A zone-distribution plausibility check is deliberately **not** on this list,
+  for the reason given above: the mirror is an exact symmetry of the data, so
+  only a behavioural prior could break it, and that is an assumption the
+  software has no business making.
 
   Provenance does not rescue this, and is worth being precise about. The
   filename-to-slot assignment **is** recorded — `Source files: plug=…,
