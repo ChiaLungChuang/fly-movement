@@ -115,13 +115,27 @@ The group's `config$use_anchored` is the single source of truth (since
 | "Use anchor method for plots & exports" checkbox, Groups tab | Seeds the value for **newly added** groups, like every other run setting in that panel |
 | "Zone method for outputs" radio, Position & Sleep tab | **Initialises from** the focused group's config, and **writes back** to it when changed |
 
-The radio is not view-only. Selecting a different group re-syncs the radio to
-that group's stored value; changing the radio edits the group. Both the
+The radio is not view-only, and it is the **only** way to change an existing
+group's method — the checkbox applies at creation and never after. Both the
 on-screen plots and the Downloads bundle read `config$use_anchored`, so they
 cannot disagree.
 
-Merely *viewing* a group does not modify it. The write-back observer keys on
-the radio input alone, so a group switch cannot trigger a write.
+The control is **rendered per group**, with its input id keyed to the group id
+(`method_<gid>`). That is what makes the binding safe rather than merely
+guarded: a value can only ever address the group named in its own id, so it
+does not matter when it arrives. An earlier design used one shared input and
+had to read the current group selection when the write fired, assuming the two
+referred to the same group. They are independent inputs, and two arrivals broke
+that assumption — an edit and a group switch applied in one flush, and, worse,
+the `updateRadioButtons` sync echo for one group returning after the user had
+moved to another. The second needed no radio interaction at all: switching
+A → B → C faster than a network round trip silently rewrote C's method to B's.
+There is no `updateRadioButtons` sync any more; `renderUI` emits the control
+already showing the group's stored value, so no server-initiated echo exists to
+arrive late.
+
+Merely *viewing* a group does not modify it, and switching groups any number of
+times performs no writes at all.
 
 ## Provenance in exports
 
@@ -241,20 +255,28 @@ chronogram render) and skips itself when `shinytest2` isn't installed.
 ### Coverage honesty
 
 New guards are mutation-tested: the guard is removed, the suite re-run, and the
-change kept only if a test actually fails. Two guards survive that check
-**uncovered**, and are commented as such in the source rather than left to look
-tested:
+change kept only if a test actually fails.
 
-- the **compare-and-skip** in the zone-method write-back
-  (`mod_position_sleep.R`) is a thrash guard, not correctness — the client echo
-  carries the value already stored, so removing it causes a redundant write,
-  not a wrong one;
-- **`ignoreInit`** on the same observer matters only in a browser, where the
-  radio always holds a value. `testServer` leaves the input `NULL` until set
-  and `observeEvent`'s `ignoreNULL` default swallows it, so no test can
-  distinguish it.
+Two guards were previously carried here as **uncovered**. Both are now gone or
+covered: the zone-method write-back's value check is exercised by the
+write-counter test (removing it fails), and the `ignoreInit` it sat beside
+disappeared with the observer it belonged to when the control became per-group.
 
-Two `testServer` limits worth knowing before writing module tests:
+One instrument limit is worth stating, since it looks like coverage and is not.
+The write counter pins *one edit produces exactly one write*, which catches an
+observer accumulating per render **when the duplicates actually write**. It
+does not catch accumulation where each duplicate carries the same value check,
+because those duplicates are no-ops. Structure is the real guarantee there: the
+writer is created once at module init, deliberately a sibling of the `renderUI`
+and not nested inside it.
+
+Three `testServer` limits worth knowing before writing module tests:
+
+- **Outputs are lazy.** A test that never touches `output$x` never runs its
+  render function. A first attempt at the accumulation test above passed
+  against deliberately broken code for exactly this reason — the observer it
+  was meant to catch was never created, because `renderUI` never ran. Touch the
+  output explicitly when the render is part of what you are testing.
 
 - **Stubbing a function that the module resolves in its own environment does
   not work.** Rebinding `run_one` inside a `testServer` block does not reach
