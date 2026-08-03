@@ -323,9 +323,15 @@ session temp files.
   Engine log, but the group never reaches `done`, so it does not appear in the
   QC tab or in Downloads. Raise the death threshold to inspect such a
   recording.
-- **Death threshold is capped at 72 h** by the input's `max`. There is no
-  server-side clamp, so a typed value above it may still reach the engine
-  depending on the browser, but the control presents 72 as the ceiling.
+- **Death threshold accepts 1–168 h** (one week). The previous ceiling was
+  72 h, which made "nothing is dead" inexpressible on a three-day recording
+  whose observed maximum inactivity was 73.6 h. Thresholds above the old cap
+  are now expressible through the control itself, and `bundle_divergence()`
+  records the value per group, so a diagnostic run at a non-default threshold
+  travels with the export and shows up as a divergence if groups disagree.
+  There is still no server-side clamp: `max` on a number input is a validation
+  hint, not a block, so a value typed past the spinner may or may not reach the
+  engine depending on the browser. The control is the supported route.
 - The anchor pass is the slow part of a run. Multiple groups process
   sequentially in the background.
 - No absolute paths; uploads use session temp files. Upload limit is

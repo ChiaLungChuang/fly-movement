@@ -53,7 +53,14 @@ mod_group_manager_ui <- function(id) {
         textInput(ns("channels"), "Channels", cfg$channels),
         splitLayout(
           numericInput(ns("sleep_thr"), "Sleep thr (min)", cfg$sleep_threshold_min, 1, 60),
-          numericInput(ns("death_thr"), "Death thr (h)",   cfg$death_threshold_hours, 1, 72),
+          # Ceiling is one week, not 72 h: a three-day recording can show a
+          # maximum inactivity above 72 (73.6 h observed), so the old cap made
+          # "nothing is dead" inexpressible on exactly the data that needed it.
+          # There is no server-side clamp, and `max` on a number input is a
+          # hint rather than a block, so this control is the only supported
+          # route to a higher threshold. bundle_divergence() records the value
+          # per group, so a non-default threshold travels with the export.
+          numericInput(ns("death_thr"), "Death thr (h)",   cfg$death_threshold_hours, 1, 168),
           numericInput(ns("bout_win"),  "Bout win (min)",  cfg$bout_window_min, 1, 60)
         ),
         # Output selector, not an analysis switch: both zone methods run on
