@@ -177,3 +177,101 @@ test_that("each group's own control edits that group and no other", {
     expect_true(isTRUE(rv$groups$gB$config$use_anchored))
   })
 })
+
+
+# -- dynamic-UI hazards ------------------------------------------------------
+# Rendering the control per group invites two mistakes that a value-only
+# assertion cannot see.
+
+test_that("one edit writes once, however many times groups were switched", {
+  # If the writer were created inside renderUI, an observer would accumulate
+  # per group switch and a single edit would write once per accumulated
+  # observer. That is terminating and invisible -- the writes agree -- so it
+  # can only be caught by counting.
+  skip_if_not(requireNamespace("shiny", quietly = TRUE), "shiny not available")
+  skip_if_not(exists("mod_position_sleep_server"), "module not sourced")
+
+  rv <- shiny::reactiveValues(
+    groups = list(gA = .done_group("gA", "A", TRUE),
+                  gB = .done_group("gB", "B", TRUE),
+                  gC = .done_group("gC", "C", TRUE)),
+    selected = "gA", log = character(0))
+
+  shiny::testServer(mod_position_sleep_server, args = list(rv = rv), {
+    for (i in 1:4) {
+      # Touch the rendered control on every switch. Outputs are lazy in
+      # testServer, so without this renderUI never runs and an observer created
+      # inside it would never be created either -- the test would pass by not
+      # exercising the thing it is meant to catch.
+      for (gid in c("gA", "gB", "gC")) {
+        session$setInputs(group = gid)
+        invisible(output$method_ui)
+      }
+    }
+    expect_equal(method_writes(), 0L)      # switching alone writes nothing
+
+    session$setInputs(group = "gA")
+    .set_group_method(session, "gA", "sm") # one user edit
+    expect_equal(method_writes(), 1L)
+    expect_false(isTRUE(rv$groups$gA$config$use_anchored))
+  })
+})
+
+test_that("a value for a removed group is dropped, not resurrected", {
+  # Shiny keeps input values for UI that has gone away, so method_<gid>
+  # outlives its group. 17c893b was exactly this class of bug for the group
+  # selection, so pin it rather than reason about it.
+  skip_if_not(requireNamespace("shiny", quietly = TRUE), "shiny not available")
+  skip_if_not(exists("mod_position_sleep_server"), "module not sourced")
+
+  rv <- shiny::reactiveValues(
+    groups = list(gA = .done_group("gA", "A", TRUE),
+                  gB = .done_group("gB", "B", TRUE)),
+    selected = "gA", log = character(0))
+
+  shiny::testServer(mod_position_sleep_server, args = list(rv = rv), {
+    session$setInputs(group = "gB")
+    .set_group_method(session, "gB", "sm")
+    expect_false(isTRUE(rv$groups$gB$config$use_anchored))
+    n_before <- method_writes()
+
+    rv$groups[["gB"]] <- NULL              # group removed
+    session$setInputs(group = "gA")
+
+    # A late value on the dead id: no error, no write, and no config entry
+    # conjured for a group that no longer exists.
+    expect_no_error(.set_group_method(session, "gB", "anchor"))
+    expect_null(rv$groups[["gB"]])
+    expect_false("gB" %in% names(rv$groups))
+    expect_equal(method_writes(), n_before)
+    expect_true(isTRUE(rv$groups$gA$config$use_anchored))   # gA untouched
+  })
+})
+
+
+test_that("the rendered control carries the selected group's id and value", {
+  # The tests above set method_<gid> directly, so they would still pass if
+  # renderUI emitted the wrong id. Assert what is actually rendered.
+  skip_if_not(requireNamespace("shiny", quietly = TRUE), "shiny not available")
+  skip_if_not(exists("mod_position_sleep_server"), "module not sourced")
+
+  rv <- shiny::reactiveValues(
+    groups = list(gA = .done_group("gA", "A", TRUE),
+                  gB = .done_group("gB", "B", FALSE)),
+    selected = "gA", log = character(0))
+
+  shiny::testServer(mod_position_sleep_server, args = list(rv = rv), {
+    session$setInputs(group = "gA")
+    html <- as.character(output$method_ui$html)
+    expect_match(html, "method_gA", fixed = TRUE)
+    expect_false(grepl("method_gB", html, fixed = TRUE))
+    # Initialised from the group's stored value, not from a default.
+    expect_match(html, 'value="anchor"[^>]*checked')
+
+    session$setInputs(group = "gB")
+    html <- as.character(output$method_ui$html)
+    expect_match(html, "method_gB", fixed = TRUE)
+    expect_false(grepl("method_gA", html, fixed = TRUE))
+    expect_match(html, 'value="sm"[^>]*checked')
+  })
+})

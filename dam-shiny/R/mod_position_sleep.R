@@ -80,10 +80,21 @@ mod_position_sleep_server <- function(id, rv) {
                    inline = TRUE)
     })
 
-    # One writer for every per-group control. Correctness no longer depends on
-    # WHEN this runs: method_<gid> can only ever address <gid>, so a late or
-    # reordered value still lands on the group it came from. rv$groups is read
-    # isolated so writing it here cannot re-trigger this observer.
+    # Number of config writes this session has performed. Exposed so a test can
+    # assert the writer runs ONCE per user edit: a dynamic UI invites observers
+    # created per render, and duplicates would be invisible in the config value
+    # because the writes agree. Counting is the only way to see them.
+    method_writes <- reactiveVal(0L)
+
+    # ONE writer for every per-group control, created once at module init --
+    # deliberately a sibling of the renderUI above, not nested inside it.
+    # Creating it in the render block would add an observer per group switch,
+    # each writing the same value on every subsequent edit.
+    #
+    # Correctness no longer depends on WHEN this runs: method_<gid> can only
+    # ever address <gid>, so a late or reordered value still lands on the group
+    # it came from. rv$groups is read isolated so writing it here cannot
+    # re-trigger this observer.
     observe({
       ins <- reactiveValuesToList(input)
       for (nm in names(ins)) {
@@ -91,6 +102,9 @@ mod_position_sleep_server <- function(id, rv) {
         val <- ins[[nm]]
         if (is.null(val) || !nzchar(val)) next
         gid <- sub("^method_", "", nm)
+        # Shiny does not clear an input when the UI that created it goes away,
+        # so method_<gid> outlives its group. A value arriving for a removed
+        # group must be dropped, not used to resurrect a config entry.
         g <- isolate(rv$groups[[gid]])
         if (is.null(g)) next
         want <- identical(val, "anchor")
@@ -100,6 +114,7 @@ mod_position_sleep_server <- function(id, rv) {
         if (identical(isTRUE(g$config$use_anchored), want)) next
         g$config$use_anchored <- want
         rv$groups[[gid]] <- g
+        method_writes(isolate(method_writes()) + 1L)
       }
     })
 
