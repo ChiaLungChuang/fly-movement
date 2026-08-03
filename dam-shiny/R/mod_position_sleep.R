@@ -11,11 +11,10 @@ mod_position_sleep_ui <- function(id) {
       box(width = 12, status = "primary", solidHeader = TRUE, title = "Group & method",
           fluidRow(
             column(6, selectInput(ns("group"), "Group", choices = NULL)),
-            # Edits this group's stored output method -- what the bundle
-            # exports, not just what is drawn below.
-            column(6, radioButtons(ns("method"), "Zone method for outputs",
-                                   c("Anchor" = "anchor", "State machine" = "sm"),
-                                   inline = TRUE))
+            # Rendered per group, so the control carries the group's identity
+            # in its input id. Edits this group's stored output method -- what
+            # the bundle exports, not just what is drawn below.
+            column(6, uiOutput(ns("method_ui")))
           )
       )
     ),
@@ -58,52 +57,57 @@ mod_position_sleep_server <- function(id, rv) {
 
     # -- Zone method: the group's config is the single source of truth -----
     # Both zone methods run on every group regardless; use_anchored selects
-    # which columns the OUTPUTS read. This radio therefore EDITS the group
-    # rather than shadowing it, so the Downloads bundle -- which reads
-    # config$use_anchored -- can never disagree with what is on screen. The
-    # add-group checkbox supplies the initial value.
-
-    # ignoreInit on the writer below matters in the live app but not under
-    # testServer: the radio always holds a value in a browser, so without it
-    # the session's first flush would write that default onto whichever group
-    # is focused. testServer leaves input$method NULL until set, and
-    # observeEvent's ignoreNULL default swallows it, so no test can tell the
-    # difference. Kept because the browser behaves differently from the mock.
-
-    # Show the focused group's own method. This is a sync, never a user edit.
-    observeEvent(input$group, {
-      g <- if (is.null(input$group)) NULL else rv$groups[[input$group]]
-      req(g)
-      updateRadioButtons(session, "method",
-        selected = if (isTRUE(g$config$use_anchored)) "anchor" else "sm")
-    })
-
-    # What stops a group being restamped merely by being VIEWED is that this
-    # observer keys on input$method ALONE. A group switch does not change
-    # input$method, so it cannot trigger a write; the sync above pushes the new
-    # group's own value, and the client echo that follows carries that same
-    # value. Widening this to observeEvent(list(input$group, input$method))
-    # reintroduces the bug, which is what the view-does-not-modify test pins.
-    observeEvent(input$method, ignoreInit = TRUE, {
+    # which columns the OUTPUTS read. This control EDITS the group rather than
+    # shadowing it, so the Downloads bundle -- which reads config$use_anchored
+    # -- cannot disagree with what is on screen. The add-group checkbox
+    # supplies the initial value, and this is the ONLY way to change it
+    # afterwards.
+    #
+    # Each group gets its own input id, method_<gid>. A single shared id
+    # carried no group identity, so the writer had to read input$group when it
+    # fired and assume the two referred to the same group. They are
+    # independent inputs and that assumption does not hold: a value can arrive
+    # after the selection has moved on, and the value check cannot catch it
+    # because it fires precisely when the values differ. Binding the id to the
+    # group removes the assumption instead of guarding it.
+    output$method_ui <- renderUI({
       gid <- input$group
       g <- if (is.null(gid)) NULL else rv$groups[[gid]]
-      req(g)
-      want <- identical(input$method, "anchor")
-      # Not correctness -- the echo carries the value already stored, so
-      # writing it would be a no-op. It avoids re-writing rv$groups on every
-      # group switch, which would invalidate the table and every plot for
-      # nothing. No test distinguishes this; it is a thrash guard.
-      if (identical(isTRUE(g$config$use_anchored), want)) return()
-      g$config$use_anchored <- want
-      rv$groups[[gid]] <- g
+      if (is.null(g)) return(NULL)
+      radioButtons(session$ns(paste0("method_", gid)), "Zone method for outputs",
+                   c("Anchor" = "anchor", "State machine" = "sm"),
+                   selected = if (isTRUE(g$config$use_anchored)) "anchor" else "sm",
+                   inline = TRUE)
+    })
+
+    # One writer for every per-group control. Correctness no longer depends on
+    # WHEN this runs: method_<gid> can only ever address <gid>, so a late or
+    # reordered value still lands on the group it came from. rv$groups is read
+    # isolated so writing it here cannot re-trigger this observer.
+    observe({
+      ins <- reactiveValuesToList(input)
+      for (nm in names(ins)) {
+        if (!startsWith(nm, "method_")) next
+        val <- ins[[nm]]
+        if (is.null(val) || !nzchar(val)) next
+        gid <- sub("^method_", "", nm)
+        g <- isolate(rv$groups[[gid]])
+        if (is.null(g)) next
+        want <- identical(val, "anchor")
+        # Skips the echo a redraw produces, which carries the value already
+        # stored. Now a pure no-op guard: with the id bound to the group it can
+        # no longer be the difference between a right and a wrong write.
+        if (identical(isTRUE(g$config$use_anchored), want)) next
+        g$config$use_anchored <- want
+        rv$groups[[gid]] <- g
+      }
     })
 
     # Read the stored value, not the control, so the rendered plots and the
     # exported ones are driven by the same field by construction.
     use_anchored <- reactive({
       g <- if (is.null(input$group)) NULL else rv$groups[[input$group]]
-      if (is.null(g)) identical(input$method, "anchor")
-      else isTRUE(g$config$use_anchored)
+      if (is.null(g)) TRUE else isTRUE(g$config$use_anchored)
     })
 
     p_timelines <- reactive({
