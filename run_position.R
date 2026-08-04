@@ -19,10 +19,17 @@ project_dir <- "/Users/cchuang/Desktop/Fly movement"
 
 # The three monitors that watch the SAME set of vials at different
 # positions along the tube (plug end / middle / food end).
+#
+# Slot assignment follows the rig convention: within an apparatus the monitors
+# run food, central, plug in FILE order, so for MonitorN the role is
+# (N - 1) mod 3 -- 0 food, 1 central, 2 plug. Monitor7 is the FOOD end and
+# Monitor9 the PLUG end. Note this is the reverse of the order the slot names
+# are written in below; assigning in file order transposes the two ends and
+# mirrors every zone assignment (Z1<->Z4, Z2<->Z3) with no error.
 monitor_files <- c(
-  plug   = file.path(project_dir, "data", "Monitor7.txt"),
+  plug   = file.path(project_dir, "data", "Monitor9.txt"),
   middle = file.path(project_dir, "data", "Monitor8.txt"),
-  food   = file.path(project_dir, "data", "Monitor9.txt")
+  food   = file.path(project_dir, "data", "Monitor7.txt")
 )
 
 group_label    <- "hTauV337M 50D"
