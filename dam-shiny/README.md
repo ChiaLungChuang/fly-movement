@@ -405,22 +405,30 @@ session temp files.
     narrows the failure to "the wiring disagrees with the declaration", which
     is worth catching, but it is not proof the assignment is correct.
 
-  **Worth resolving before relying on either:** this repo's own demo group and
-  test fixtures assign `Monitor7 → plug`, `Monitor8 → middle`,
-  `Monitor9 → food`, while the convention above gives `Monitor7 → food` and
-  `Monitor9 → plug`. Either the bundled samples do not follow the rig
-  convention, or the demo mapping is itself transposed. Nothing here depends on
-  the answer yet — no test asserts a zone *direction* — but the guard below
-  cannot be written until it is settled, and if the convention does apply to
-  those files then every zone figure produced from the demo is mirrored.
+  **This app's own demo group was transposed, and stayed that way from the
+  initial commit until 2026-08-04.** The bundled `Monitor7/8/9.txt` are real
+  rig exports — each carries its own monitor number internally in column 6 —
+  so the convention applies to them, and the demo assigned `Monitor7 → plug`
+  and `Monitor9 → food`, the exact reverse. The cause is the picker-order trap
+  above: the form reads Plug → Middle → Food while the files arrive food,
+  central, plug, and whoever wired the demo worked down the form in file order.
+  Corrected in `setup.R` and the demo group; every zone figure produced from
+  the demo before that date is mirrored.
+
+  That is the argument for guard 1 below, which is why it is no longer merely
+  queued. The trap caught the people who wrote the software, in the repository
+  that documents the trap, and stayed invisible for the whole of the project's
+  history — through a full smoke test on real data and 246 passing tests.
 
   *Queued guards, none implemented.* In order of value per unit of work:
 
-  1. **Fix the ordering trap at source.** The pickers read Plug → Middle →
-     Food while the files arrive food, central, plug. Reordering them to match
-     apparatus file order, or labelling each with the monitor number the
-     convention expects, attacks the cause rather than detecting the effect,
-     and is a few lines of UI text.
+  1. **Fix the ordering trap at source — worth doing, not merely queued.** The
+     pickers read Plug → Middle → Food while the files arrive food, central,
+     plug. Reordering them to match apparatus file order, or labelling each
+     with the monitor number the convention expects, attacks the cause rather
+     than detecting the effect, and is a few lines of UI text. It is promoted
+     out of the queue because this trap demonstrably catches people who know
+     about it: it caught the demo group in this repository.
   2. **Confirm the mapping at add-group time, and check it against the
      convention.** Reuse the existing alignment-confirmation modal: show the
      derived slot-to-file mapping and flag where it disagrees with the declared
@@ -450,6 +458,18 @@ session temp files.
   assignment faithfully, and a transposed run is therefore recorded, correctly,
   as exactly the wrong thing. Provenance records what was done, not whether it
   should have been.
+
+- **The demo data's activity is not distributed as the corridor layout might
+  suggest, and that is a biological question, not a software one.** Under the
+  corrected mapping the bundled monitors carry, in total beam breaks:
+  `Monitor9` (plug end) 66,488, `Monitor7` (food end) 33,673, `Monitor8`
+  (central) 28,778. The plug end therefore records roughly twice the activity
+  of the food end, with the centre lowest. Recorded here only so that whoever
+  next reads the demo sees it stated rather than rediscovering it as a
+  surprise; nothing in the pipeline depends on it, and no check should. It is
+  not evidence that the mapping is wrong — the mapping is fixed by the rig
+  convention and the monitor ids in the files — and interpreting it is the
+  experimenter's business.
 
 ### Open questions
 

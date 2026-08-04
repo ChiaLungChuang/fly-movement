@@ -47,10 +47,16 @@ if (requireNamespace("shiny", quietly = TRUE)) {
 }
 
 # Path to bundled sample monitors.
+# Slot assignment follows the rig convention: within an apparatus the monitors
+# run food, central, plug in file order, so for MonitorN the role is
+# (N - 1) mod 3 -- 0 food, 1 central, 2 plug. Monitor7 is therefore the FOOD
+# end and Monitor9 the PLUG end. This was transposed until 2026-08-04; the
+# picker order in the app reads Plug -> Middle -> Food, which is the reverse of
+# file order, and the fixtures inherited that mistake.
 sample_paths <- list(
-  plug   = file.path(app_root, "inst", "extdata", "Monitor7.txt"),
+  plug   = file.path(app_root, "inst", "extdata", "Monitor9.txt"),
   middle = file.path(app_root, "inst", "extdata", "Monitor8.txt"),
-  food   = file.path(app_root, "inst", "extdata", "Monitor9.txt")
+  food   = file.path(app_root, "inst", "extdata", "Monitor7.txt")
 )
 
 # Synthetic staggered-end monitor set: three Case-A files starting together,

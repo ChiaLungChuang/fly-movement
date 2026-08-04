@@ -18,8 +18,8 @@
   file.copy(unlist(sample_paths)[1:3], dest)
   list(
     paths = c(plug = dest[1], middle = dest[2], food = dest[3]),
-    names = list(plug = "Monitor7.txt", middle = "Monitor8.txt",
-                 food = "Monitor9.txt"),
+    names = list(plug = "Monitor9.txt", middle = "Monitor8.txt",
+                 food = "Monitor7.txt"),
     dir   = dir
   )
 }
@@ -36,9 +36,11 @@ test_that("the log shows the original upload names, not the datapaths", {
                                             source_names = u$names)))
   lines <- .reading_lines(out)
   expect_length(lines, 3)
-  expect_match(lines[1], "Monitor7.txt", fixed = TRUE)
+  # Roles in log order are plug, middle, food -- which under the rig
+  # convention is Monitor9, Monitor8, Monitor7.
+  expect_match(lines[1], "Monitor9.txt", fixed = TRUE)
   expect_match(lines[2], "Monitor8.txt", fixed = TRUE)
-  expect_match(lines[3], "Monitor9.txt", fixed = TRUE)
+  expect_match(lines[3], "Monitor7.txt", fixed = TRUE)
 
   # The bug was that three distinct monitors were indistinguishable.
   expect_equal(length(unique(lines)), 3L)
@@ -46,7 +48,7 @@ test_that("the log shows the original upload names, not the datapaths", {
   # A plain upload shows the name alone. The datapath it happens to be stored
   # under is an implementation detail, and annotating every line with it was
   # noise; the aligned flag now carries the case that genuinely needs saying.
-  expect_match(lines[1], "Reading \\[plug\\]: Monitor7\\.txt$")
+  expect_match(lines[1], "Reading \\[plug\\]: Monitor9\\.txt$")
   expect_false(any(grepl("0.txt", lines, fixed = TRUE)))
 })
 
@@ -60,7 +62,7 @@ test_that("without upload names the log falls back to the file's own basename", 
     suppressWarnings(read_position_monitors(mf, channels = 1:4, tz = "UTC")))
   lines <- .reading_lines(out)
   expect_length(lines, 3)
-  expect_match(lines[1], "Monitor7.txt", fixed = TRUE)
+  expect_match(lines[1], "Monitor9.txt", fixed = TRUE)   # plug slot
 })
 
 test_that("an aligned temp copy is shown as read-from, not as the upload", {
@@ -68,8 +70,8 @@ test_that("an aligned temp copy is shown as read-from, not as the upload", {
   u <- .as_upload(); on.exit(unlink(u$dir, recursive = TRUE), add = TRUE)
 
   # Stand in for dam_write_aligned() output: same data, different filename.
-  aligned <- file.path(u$dir, c("Monitor7_aligned.txt", "Monitor8_aligned.txt",
-                                "Monitor9_aligned.txt"))
+  aligned <- file.path(u$dir, c("Monitor9_aligned.txt", "Monitor8_aligned.txt",
+                                "Monitor7_aligned.txt"))
   file.copy(unname(u$paths), aligned)
   mf <- c(plug = aligned[1], middle = aligned[2], food = aligned[3])
 
@@ -80,8 +82,8 @@ test_that("an aligned temp copy is shown as read-from, not as the upload", {
   lines <- .reading_lines(out)
   # Both facts present: which upload it came from, and that the run read a
   # repaired copy rather than the upload itself.
-  expect_match(lines[1], "Monitor7.txt", fixed = TRUE)
-  expect_match(lines[1], "Monitor7_aligned.txt", fixed = TRUE)
+  expect_match(lines[1], "Monitor9.txt", fixed = TRUE)
+  expect_match(lines[1], "Monitor9_aligned.txt", fixed = TRUE)
   expect_match(lines[1], "aligned copy", fixed = TRUE)
 
   # Without the flag the same paths read as a plain upload -- the flag, not
@@ -98,15 +100,15 @@ test_that("the worker payload carries the upload names", {
 
   g <- new_group("g1", "G", "#0072B2")
   g$monitor_paths <- list(plug = "0.txt", middle = "1.txt", food = "2.txt")
-  g$monitor_names <- list(plug = "Monitor7.txt", middle = "Monitor8.txt",
-                          food = "Monitor9.txt")
+  g$monitor_names <- list(plug = "Monitor9.txt", middle = "Monitor8.txt",
+                          food = "Monitor7.txt")
   rv <- shiny::reactiveValues(groups = list(g1 = g), selected = NULL,
                               log = character(0))
 
   shiny::testServer(mod_group_manager_server, args = list(rv = rv), {
     lean <- dam_lean_group(rv$groups$g1)
     expect_true("monitor_names" %in% names(lean))
-    expect_equal(lean$monitor_names$plug, "Monitor7.txt")
+    expect_equal(lean$monitor_names$plug, "Monitor9.txt")
 
     # Running on aligned temps swaps the paths but must NOT rewrite the names:
     # the upload is still what the user chose.
@@ -114,6 +116,6 @@ test_that("the worker payload carries the upload names", {
                  food = "c_aligned.txt")
     lean2 <- dam_lean_group(rv$groups$g1, aligned = aligned)
     expect_equal(unlist(lean2$monitor_paths, use.names = FALSE), unname(aligned))
-    expect_equal(lean2$monitor_names$plug, "Monitor7.txt")
+    expect_equal(lean2$monitor_names$plug, "Monitor9.txt")
   })
 })

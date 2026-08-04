@@ -234,9 +234,13 @@ mod_group_manager_server <- function(id, rv, parent = NULL) {
     observeEvent(input$demo, {
       ex <- system.file("extdata", package = "damshiny")
       if (!nzchar(ex)) ex <- file.path("inst", "extdata")   # running from source
-      paths <- list(plug   = file.path(ex, "Monitor7.txt"),
+      # Rig convention: role is (N - 1) mod 3 for MonitorN -- 0 food, 1 central,
+      # 2 plug. Monitor7 is the food end, Monitor9 the plug end. Transposed
+      # until 2026-08-04, because the picker order above reads Plug -> Middle
+      # -> Food while the files arrive food, central, plug.
+      paths <- list(plug   = file.path(ex, "Monitor9.txt"),
                     middle = file.path(ex, "Monitor8.txt"),
-                    food   = file.path(ex, "Monitor9.txt"))
+                    food   = file.path(ex, "Monitor7.txt"))
       if (!all(file.exists(unlist(paths)))) {
         showNotification("Sample data not found in inst/extdata.", type = "error")
         return()

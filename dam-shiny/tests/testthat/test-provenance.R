@@ -17,8 +17,8 @@
   g$config$death_threshold_hours <- death
   g$config$sleep_threshold_min   <- sleep_thr
   g$config$lights_on             <- lights_on
-  g$monitor_names <- list(plug = "Monitor7.txt", middle = "Monitor8.txt",
-                          food = "Monitor9.txt")
+  g$monitor_names <- list(plug = "Monitor9.txt", middle = "Monitor8.txt",
+                          food = "Monitor7.txt")
   g$monitor_paths <- list(plug = "/tmp/0.txt", middle = "/tmp/1.txt",
                           food = "/tmp/2.txt")
   g$aligned <- aligned
