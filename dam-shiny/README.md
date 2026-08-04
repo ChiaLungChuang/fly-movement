@@ -157,23 +157,25 @@ in the Downloads tab before download — that surface catches it while you can
 still act, the bundle file is what survives to whoever opens the artefacts
 later.
 
-### Reproducibility warning — workbooks predating `8f68538`
+See **Output validity by commit** for what an artefact produced before a
+given commit is wrong about.
 
-**This is a numbers change, not a labelling change.**
+## Output validity by commit
 
-Before commit `8f68538`, `export_results_excel()` read `sleep_zone_anchored`,
-`zone_anchored` and `bout_start_anchored` unconditionally, ignoring
-`use_anchored` entirely. So:
+Two defects produced wrong output that carried no sign of being wrong. Each is
+stated as: an output produced before commit X is wrong in way Y. Keep this list
+short — it is only useful if it stays current.
 
-- Any `results.xlsx` **without** a `Provenance` sheet is **anchor-method by
-  construction**, whatever the group's setting was at the time. That rule is
-  the only way to interpret such a file.
-- For a **state-machine** group, `Per_fly` and `Group_summary` were derived
-  from the anchor columns. The same input re-exported after `8f68538` will
-  contain **different per-fly zone counts**. Both files are internally
-  consistent; they report different things.
-- Anchor-method groups are unaffected — the new default reproduces the old
-  behaviour exactly.
+| Output | Produced before | Is wrong how |
+|---|---|---|
+| `results.xlsx` with no `Provenance` sheet | `8f68538` | Anchor-method by construction. For a group set to state machine, `Per_fly` and `Group_summary` report anchor-method numbers. |
+| Zone output from the **app's demo group** | `388132a` | Mirrored: `Z1`↔`Z4`, `Z2`↔`Z3`. |
+| Zone output from **`run_position.R`** | `2ee7aeb` | Mirrored: `Z1`↔`Z4`, `Z2`↔`Z3`. Applies to every run ever made — the mapping was wrong from the initial commit. |
+
+Mirrored means the plug and food monitors were assigned to each other's slots,
+so every zone assignment is reflected end for end. `Z1`↔`Z4` swaps exactly;
+`Z2`↔`Z3` is near-exact, differing only where the state machine carries a zone
+forward across an ambiguous bin.
 
 ## Duplicated engine files
 
@@ -335,11 +337,13 @@ session temp files.
   `engine_copy_diff.R` detects drift; it does not prevent it.
   De-duplicating properly — one copy, sourced by both the app and
   `run_position.R` — is a queued ticket.
-- **Workbooks predating `8f68538`** have no `Provenance` sheet and are
-  anchor-method by construction. For a state-machine group the per-fly zone
-  counts differ from a re-export. See the reproducibility warning above.
-- **Two guards are uncovered by tests** (the thrash guard and `ignoreInit`);
-  see **Coverage honesty**.
+- **Some already-produced outputs are wrong** — workbooks without a
+  `Provenance` sheet, and zone output from the demo group or the batch script
+  before their respective fixes. The boundaries are listed once, in
+  **Output validity by commit**; they are not repeated here.
+- **One test instrument looks like more coverage than it is**: the
+  zone-method write counter cannot see observer accumulation whose duplicates
+  are no-ops. See **Coverage honesty**.
 - **A run where every channel is classified dead stops with an error** rather
   than returning a result. The per-channel detail is still printed to the
   Engine log, but the group never reaches `done`, so it does not appear in the
